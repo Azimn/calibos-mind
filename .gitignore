@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+# Private runtime state: the thought database and the prompt inbox live
+# on this machine only. They are deliberately NOT backed up to GitHub.
+# What is preserved: the architecture (code, cartridge, research, docs)
+# and its evolution (CHANGELOG.md). The store rebuilds from `mind init`
+# plus the cartridge; continuity lives in distilled memory, not raw rows.
+mind.db
+mind.db-*
+inbox/
