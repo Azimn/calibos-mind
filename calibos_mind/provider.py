@@ -63,3 +63,30 @@ class InboxCognition:
         payload = json.loads(path.read_text(encoding="utf-8"))
         path.unlink()
         return payload
+
+
+class DreamCognition:
+    """Cognition provider for dream ticks.
+
+    When the sleeping engine wants a thought, there is nobody home to think
+    it. Instead the cognitive view — the immutable subjective experiences the
+    engine's own association machinery surfaced together under this trigger —
+    is recorded as a dream fragment, and the provider returns None (silence).
+
+    Nothing is queued to the inbox, no thought is injected, and no conduct
+    can follow from a dream: dreams propose, the waker disposes. Zero LLM
+    calls; the dreaming is done entirely by the engine's native triggers,
+    echoes, and memory resurfacing running with no outside world.
+    """
+
+    def __init__(self, dream_dir: str | Path):
+        self.dream_dir = Path(dream_dir)
+        self.dream_dir.mkdir(parents=True, exist_ok=True)
+        self.fragments: list[list[dict]] = []
+
+    def think(self, view):
+        self.fragments.append(
+            [{"source": e.source, "first_person": e.first_person}
+             for e in view.experiences]
+        )
+        return None

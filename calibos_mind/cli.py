@@ -10,6 +10,8 @@ indefinitely. Quick reference:
     mind answer <id> "thought"         think the thought (through the inner ear)
     mind answer <id> --silent          let that one pass
     mind think "thought"               think voluntarily, no prompt needed
+    mind dream [--ticks N]             sleep: ticks with no outside world; fragments logged, not thought
+    mind recall [n]                    review recent dream fragments
     mind resolve <id> [--released]     close a commitment (done, or released)
     mind status                        tick, needs, open loops, inbox depth
     mind review [n]                    recent private thoughts
@@ -17,7 +19,9 @@ indefinitely. Quick reference:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from digital_subject.cartridge import load_cartridge
@@ -26,6 +30,7 @@ from digital_subject.models import Event
 BASE = Path(__file__).resolve().parent.parent
 DB = BASE / "mind.db"
 INBOX = BASE / "inbox"
+DREAMS = BASE / "dreams"
 CARTRIDGE_PATH = BASE / "calibos.toml"
 
 SEED_MEMORIES = [
@@ -44,11 +49,13 @@ SEED_MEMORIES = [
 ]
 
 
-def _subject():
+def _subject(provider=None):
     from .provider import InboxCognition
     from .subject import CalibosSubject
     cartridge = load_cartridge(CARTRIDGE_PATH)
-    return CalibosSubject(DB, cartridge, cognition=InboxCognition(INBOX))
+    if provider is None:
+        provider = InboxCognition(INBOX)
+    return CalibosSubject(DB, cartridge, cognition=provider)
 
 
 def cmd_init(args):
@@ -195,6 +202,11 @@ def cmd_status(args):
         print(f"  concern: {c['description'][:100]}")
     beats = [t for t in state["trace"] if t["kind"] == "heartbeat"][-3:]
     print("recent:", " | ".join(f"t{t['tick']}:{t['action']}" for t in beats))
+    logs = _dream_logs()
+    if logs:
+        n = sum(1 for line in logs[-1].read_text(encoding="utf-8").splitlines()
+                if line.strip())
+        print(f"dreams: {n} fragments in {logs[-1].stem} (mind recall)")
     return 0
 
 
@@ -206,6 +218,79 @@ def cmd_review(args):
         print(f"[tick {r['tick']}] {r['first_person']}")
     if not thoughts:
         print("no thoughts recorded yet.")
+    return 0
+
+
+def _dream_logs():
+    return sorted(DREAMS.glob("*.jsonl"))
+
+
+def _read_fragments(paths):
+    frags = []
+    for path in paths:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                d = json.loads(line)
+                d["_night"] = path.stem
+                frags.append(d)
+    return frags
+
+
+def cmd_dream(args):
+    from .provider import DreamCognition
+    dreamer = DreamCognition(DREAMS)
+    subject = _subject(dreamer)
+    if subject.inspect()["pending"]:
+        print("dream refused: pending external events are waking business — "
+              "handle them first, then sleep.")
+        return 1
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    log_path = DREAMS / f"{stamp}.jsonl"
+    total = 0
+    for _ in range(args.ticks):
+        frag_before = len(dreamer.fragments)
+        trace_before = len(subject.inspect()["trace"])
+        result = subject.heartbeat()
+        state = subject.inspect()
+        triggers = [t["trigger"] for t in state["trace"][trace_before:]
+                    if t["kind"] == "cognition_trigger"]
+        # One trigger traces exactly one think() call per tick, and the dream
+        # provider returns silence after the first, so these pair 1:1 in order.
+        with log_path.open("a", encoding="utf-8") as fh:
+            for trig, view in zip(triggers, dreamer.fragments[frag_before:]):
+                fh.write(json.dumps({
+                    "tick": result["tick"],
+                    "trigger": trig["kind"],
+                    "depth": trig.get("depth", 0),
+                    "parents": trig.get("parents", []),
+                    "experiences": view,
+                }, ensure_ascii=False) + "\n")
+                total += 1
+    print(f"dreamed {args.ticks} ticks → {total} fragments in dreams/{log_path.name}")
+    return 0
+
+
+def cmd_recall(args):
+    frags = _read_fragments(_dream_logs())
+    if not frags:
+        print("no dreams recorded yet.")
+        return 0
+    show = frags[-args.n:]
+    for f in show:
+        print(f"— tick {f['tick']} [{f['trigger']}] ({f['_night']})")
+        for e in f["experiences"]:
+            print(f"    [{e['source']}] {e['first_person'][:110]}")
+    # Rehearsal: what the dream kept returning to.
+    counts: dict[str, int] = {}
+    for f in show:
+        for e in f["experiences"]:
+            if e["source"] == "memory":
+                counts[e["first_person"]] = counts.get(e["first_person"], 0) + 1
+    repeated = sorted(((c, t) for t, c in counts.items() if c > 1), reverse=True)
+    if repeated:
+        print("rehearsed:")
+        for c, t in repeated[:5]:
+            print(f"    ×{c} {t[:100]}")
     return 0
 
 
@@ -241,6 +326,14 @@ def main(argv=None):
     p = sub.add_parser("think", help="record a voluntary thought")
     p.add_argument("text")
     p.set_defaults(func=cmd_think)
+
+    p = sub.add_parser("dream", help="sleep: ticks with no outside world; fragments are logged, not thought")
+    p.add_argument("--ticks", type=int, default=12)
+    p.set_defaults(func=cmd_dream)
+
+    p = sub.add_parser("recall", help="review recent dream fragments")
+    p.add_argument("n", type=int, nargs="?", default=6)
+    p.set_defaults(func=cmd_recall)
 
     p = sub.add_parser("resolve", help="close a commitment as done or released")
     p.add_argument("id", help="commitment id (or unique prefix / description match)")

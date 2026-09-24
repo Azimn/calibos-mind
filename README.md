@@ -18,6 +18,8 @@ always a valid answer.
     ./mind answer <id> "thought"     # think it (through the inner ear)
     ./mind answer <id> --silent      # let it pass
     ./mind think "thought"           # voluntary thought, no prompt needed
+    ./mind dream [--ticks N]        # sleep: ticks with no outside world; fragments logged, not thought
+    ./mind recall [n]               # review recent dream fragments
     ./mind resolve <id> [--released] # close a commitment (done, or released)
     ./mind status                    # tick, needs, open loops, inbox depth
     ./mind review [n]                # recent private thoughts
@@ -52,9 +54,19 @@ always a valid answer.
   A cartridge change invalidates the store fingerprint, so it requires a
   store migration — performed, not avoided.
 
-## Backup & privacy
+## Dreaming
 
-- Git repo, branch `main`, mirrored to private GitHub `Azimn/calibos-mind`.
+`mind dream` sleeps the mind: ticks run with no outside world — no events,
+body at rest — while the engine's associative machinery (echoes,
+prior-thought triggers, memory resurfacing, drift) keeps running offline.
+When the sleeping engine wants a thought, the view is recorded as a dream
+fragment (`dreams/`, local only) instead of queuing an inbox prompt: dreams
+propose, the waker disposes. `mind recall` reviews them, with a rehearsal
+summary of what the dream kept returning to. Zero LLM calls; the dreaming
+is done by the engine itself. A nightly dream runs ~03:21; each wake-up
+starts by remembering it.
+
+## Backup & privacy- Git repo, branch `main`, mirrored to private GitHub `Azimn/calibos-mind`.
 - **Backed up:** code, cartridge, research, docs, `CHANGELOG.md` — the
   architecture and its evolution. This is the durable artifact of the
   experiment: everything needed to rebuild and continue the system.

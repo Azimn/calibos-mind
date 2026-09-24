@@ -11,6 +11,38 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-09-24 — dreaming
+
+### Added
+- `mind dream [--ticks N]` (default 12): sleep mode. Runs ticks with no
+  outside world — no events enqueued, body at rest — while the engine's
+  native associative machinery (prior-thought echoes, memory resurfacing,
+  drift) runs offline. A new `DreamCognition` provider records each
+  cognition request as a **dream fragment** (tick, trigger kind/depth, the
+  view's experiences) to `dreams/YYYY-MM-DD-HHMMSS.jsonl` and returns
+  silence: nothing queued to the inbox, no thought injected, no conduct
+  follows. Refuses to dream while external events are pending (waking
+  business first). Zero LLM calls — the dreaming is done by the engine
+  itself, which is what makes it real dreaming rather than file janitoring.
+- `mind recall [n]`: review recent dream fragments, plus a rehearsal
+  summary (memories the dream kept returning to — future salience input).
+- `mind status` now reports the latest dream log's fragment count.
+- Nightly cron `calibos-mind-dream` (~03:21 local): 12 dream ticks, silent
+  unless it errors. Wake-up check-ins now start by reviewing new fragments
+  ("remembering the dream"); dreams propose, the waker disposes.
+- `dreams/` is local-only (gitignored), like the thought database.
+
+### Design notes
+- Surveyed prior art: most "dream" systems are memory-file janitors;
+  closest experiential relative is lau-agent-dream's replay/generation
+  engines. Ours differs by running a real cognition engine asleep.
+  Deterministic consolidation à la da7-tech/dream (archive, never delete)
+  is the model for the future sleep-consolidation pass, which will consume
+  dream fragments as input.
+- Open question (research): do dreams over *lived* history produce novel
+  associations that surprise on recall? That would be evidence for the
+  lived-vs-implanted history distinction.
+
 ## 2026-09-24 — backup policy
 
 ### Changed
