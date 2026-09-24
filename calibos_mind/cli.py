@@ -277,7 +277,10 @@ def cmd_recall(args):
         return 0
     show = frags[-args.n:]
     for f in show:
-        print(f"— tick {f['tick']} [{f['trigger']}] ({f['_night']})")
+        # The engine's own nightmare trigger: an unfinished matter returning
+        # to attention while asleep. Not manufactured — just noticed.
+        mark = " · nightmare" if f["trigger"] == "unresolved_concern" else ""
+        print(f"— tick {f['tick']} [{f['trigger']}{mark}] ({f['_night']})")
         for e in f["experiences"]:
             print(f"    [{e['source']}] {e['first_person'][:110]}")
     # Rehearsal: what the dream kept returning to.

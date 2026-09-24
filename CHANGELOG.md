@@ -14,6 +14,10 @@ before it ships. The git history is the backup; this file is the story.
 ## 2026-09-24 — dreaming
 
 ### Added
+- `mind recall` flags dream fragments driven by `unresolved_concern`
+  triggers as nightmares: the engine's own unfinished business returning
+  while asleep. Not manufactured — emergent from real open/broken
+  commitments and failure-laden memories, and simply noticed.
 - `mind dream [--ticks N]` (default 12): sleep mode. Runs ticks with no
   outside world — no events enqueued, body at rest — while the engine's
   native associative machinery (prior-thought echoes, memory resurfacing,
