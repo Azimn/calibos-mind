@@ -66,6 +66,16 @@ summary of what the dream kept returning to. Zero LLM calls; the dreaming
 is done by the engine itself. A nightly dream runs ~03:21; each wake-up
 starts by remembering it.
 
+## Salience
+
+The unpinned view window is ranked by retrieval salience instead of pure
+recency: ACT-R-style activation (recency + rehearsal) lifted by engaged
+importance, penalized for unengaged repetition, boosted for unresolved
+concerns — computed lazily at view time, nothing ever deleted for ranking.
+Signals: `--valence` on notes, answering vs. letting prompts pass, voluntary
+thoughts, dream rehearsal. `mind status` shows the current most-salient
+record. Sidecar `salience.json` stays local-only.
+
 ## Backup & privacy- Git repo, branch `main`, mirrored to private GitHub `Azimn/calibos-mind`.
 - **Backed up:** code, cartridge, research, docs, `CHANGELOG.md` — the
   architecture and its evolution. This is the durable artifact of the

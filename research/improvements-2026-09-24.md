@@ -14,6 +14,12 @@ Letta sleep-time compute arXiv:2504.13171).
 **Sketch:** New memory type `insight` with `source_ids`. CLI: `mind consolidate [--since N]` lists candidate thoughts (unconsolidated, salience-ranked); you (the assistant, during review or a wake-up — no new models) write 1–3 insights via `mind note --insight --from <ids>`; CLI marks sources consolidated. Later, cheap lexical-overlap clustering can pre-group candidates, but start manual — the CLI support is the real work, the synthesis is already yours.
 
 ## 2. Salience with decay + rehearsal (a real forgetting curve)
+> Implemented 2026-09-24 as `calibos_mind/salience.py` (see CHANGELOG).
+> Divergences from the sketch: ACT-R `log(sum(t^-0.5))` activation instead of
+> half-life multiplication (ported from persona_engine_PYTHONX); engagement
+> signals instead of fixed rehearsal constants; unresolved-boost instead of
+> per-type half-lives; no archival threshold yet (waits for consolidation).
+> Next: Pretorius per-class caps + Jaccard dedupe for the workspace.
 
 **What changes:** Every memory and thought gets `salience` (default 1.0), `last_rehearsed_tick`, and a per-type half-life (raw thoughts ~7 days, insights ~60 days, cartridge roots exempt/infinite). Decay is applied *lazily on read* — `salience × 0.5^((now − last_rehearsed)/half_life)` — so there's no sweep job. Rehearsal events reset the clock and boost: echo answered (+0.5), memory-feedback on an answer (+0.3), voluntary think referencing it (+0.4). Below 0.05 → archived out of all sampling pools (still queryable, never deleted).
 

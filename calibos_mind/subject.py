@@ -16,16 +16,24 @@ from .workspace import CalibosWorkspace
 
 
 class CalibosSubject(EndogenousSubject):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, salience_path=None, **kwargs):
+        self._salience_path = salience_path
         super().__init__(*args, **kwargs)
         # Fresh stores get a stock workspace from __init__; existing stores are
         # rebuilt by _restore. Normalize both to CalibosWorkspace.
         if not isinstance(self.workspace, CalibosWorkspace):
             self.workspace = CalibosWorkspace.from_dict(self.workspace.to_dict())
+        self._attach_salience()
+
+    def _attach_salience(self):
+        if self._salience_path is not None:
+            from .salience import SalienceTracker
+            self.workspace.salience_tracker = SalienceTracker(self._salience_path)
 
     def _restore(self, raw):
         super()._restore(raw)
         self.workspace = CalibosWorkspace.from_dict(raw["workspace"])
+        self._attach_salience()
         self.trigger = {"kind": "none", "parents": [], "depth": 0}
 
     def inject_thought(self, text: str, trigger_kind: str = "answered") -> str:

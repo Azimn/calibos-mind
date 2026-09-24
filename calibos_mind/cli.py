@@ -31,6 +31,7 @@ BASE = Path(__file__).resolve().parent.parent
 DB = BASE / "mind.db"
 INBOX = BASE / "inbox"
 DREAMS = BASE / "dreams"
+SALIENCE = BASE / "salience.json"
 CARTRIDGE_PATH = BASE / "calibos.toml"
 
 SEED_MEMORIES = [
@@ -55,7 +56,33 @@ def _subject(provider=None):
     cartridge = load_cartridge(CARTRIDGE_PATH)
     if provider is None:
         provider = InboxCognition(INBOX)
-    return CalibosSubject(DB, cartridge, cognition=provider)
+    return CalibosSubject(DB, cartridge, cognition=provider, salience_path=SALIENCE)
+
+
+def _tracker(subject):
+    return subject.workspace.salience_tracker
+
+
+def _record_map(subject):
+    return {r["id"]: r for r in subject.inspect()["workspace"]["records"]}
+
+
+def cmd_init(args):
+    if DB.exists() and not args.force:
+        print(f"store already exists at {DB} (use --force to reseed)")
+        return 1
+    if args.force and DB.exists():
+        DB.unlink()
+    subject = _subject()
+    with subject._transaction():
+        for text, concept_pair in SEED_MEMORIES:
+            subject._add("memory", text, concepts=concept_pair, generated_by="cartridge")
+    # Record ids restart at experience-1 on reseed; the sidecar must restart too.
+    from .salience import SalienceTracker
+    SalienceTracker(SALIENCE).reset()
+    print(f"initialized {DB}")
+    print("identity + preference roots seeded and pinned.")
+    return 0
 
 
 def cmd_init(args):
@@ -75,12 +102,21 @@ def cmd_init(args):
 
 def cmd_note(args):
     subject = _subject()
+    before = set(_record_map(subject))
     tags = tuple(t.strip() for t in args.tags.split(",") if t.strip()) if args.tags else ()
     if args.kind == "message":
         subject.message(args.source, args.text)
     else:
         subject.enqueue(Event(args.kind, args.source, args.text, tags=tags, valence=args.valence))
     _run_tick(subject)
+    # Valence-tagged notes mark their records as important.
+    if args.valence:
+        tracker = _tracker(subject)
+        now = subject.engine.state.tick
+        for rid, r in _record_map(subject).items():
+            if rid not in before and r["source"] in {"perception", "social"}:
+                tracker.add_importance(rid, r["tick"], min(1.0, abs(args.valence)))
+        tracker.save()
     return 0
 
 
@@ -124,14 +160,30 @@ def cmd_answer(args):
     from .provider import InboxCognition
     provider = InboxCognition(INBOX)
     payload = provider.consume(args.id)
+    subject = _subject()
+    tracker = _tracker(subject)
+    now = subject.engine.state.tick
+    records = _record_map(subject)
+    by_text = {(r["source"], r["first_person"]): r for r in records.values()}
     if args.silent:
+        # Surfaced but not engaged: mild penalty, so unanswered material
+        # sinks instead of recurring forever.
+        for e in payload["experiences"]:
+            r = by_text.get((e["source"], e["first_person"]))
+            if r is not None:
+                tracker.note_unengaged(r["id"], r["tick"])
+        tracker.save()
         print(f"{args.id}: let pass (silence).")
         return 0
     if not args.text:
         print("give the thought as text, or use --silent.")
         return 1
-    subject = _subject()
     tid = subject.inject_thought(args.text, trigger_kind="answered")
+    # Answering is engagement: the thought mattered.
+    r = records.get(tid)
+    if r is not None:
+        tracker.add_importance(tid, r["tick"], 0.5)
+    tracker.save()
     print(f"{args.id}: thought recorded as {tid}.")
     # show what the inner ear did with it
     state = subject.inspect()
@@ -146,6 +198,12 @@ def cmd_answer(args):
 def cmd_think(args):
     subject = _subject()
     tid = subject.inject_thought(args.text, trigger_kind="voluntary")
+    # A voluntary thought is revealed preference: it mattered.
+    r = _record_map(subject).get(tid)
+    if r is not None:
+        tracker = _tracker(subject)
+        tracker.add_importance(tid, r["tick"], 0.3)
+        tracker.save()
     print(f"thought recorded as {tid}.")
     return 0
 
@@ -207,6 +265,15 @@ def cmd_status(args):
         n = sum(1 for line in logs[-1].read_text(encoding="utf-8").splitlines()
                 if line.strip())
         print(f"dreams: {n} fragments in {logs[-1].stem} (mind recall)")
+    tracker = _tracker(subject)
+    recs = [r for r in state["workspace"]["records"]
+            if r.get("generated_by") != "cartridge" and r["available_to_cognition"]]
+    if recs and tracker is not None:
+        now_tick = eng["tick"]
+        top = max(recs, key=lambda r: tracker.activation(
+            r["id"], r["tick"], now_tick,
+            unresolved=bool(r["concern_links"] or r["expectation_links"])))
+        print(f"most salient: [{top['source']}] {top['first_person'][:80]}")
     return 0
 
 
@@ -266,7 +333,14 @@ def cmd_dream(args):
                     "experiences": view,
                 }, ensure_ascii=False) + "\n")
                 total += 1
-    print(f"dreamed {args.ticks} ticks → {total} fragments in dreams/{log_path.name}")
+    # Dreams rehearse: fold the night's memory surfacings into salience.
+    tracker = _tracker(subject)
+    records = list(_record_map(subject).values())
+    rehearsed = tracker.rehearse_from_dreams(DREAMS, records)
+    tracker.prune({r["id"] for r in records})
+    tracker.save()
+    print(f"dreamed {args.ticks} ticks → {total} fragments in dreams/{log_path.name} "
+          f"({rehearsed} rehearsals folded into salience)")
     return 0
 
 

@@ -11,6 +11,37 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-09-24 — salience, lazy decay, rehearsal
+
+### Added
+- `calibos_mind/salience.py`: the retrieval substrate (roadmap #2).
+  ACT-R-style activation computed fresh at view time — `log(sum(t^-0.5))`
+  over creation + recall ticks — ported from Azimn/persona_engine_PYTHONX
+  `core/memory.py` (deterministic, zero models). Importance signals are
+  ours, from engagement rather than simulated affect:
+  - `mind note --valence v` marks the new perception/social record (+|v|)
+  - `mind answer <id> "thought"` marks the thought (+0.5, it was engaged)
+  - `mind answer <id> --silent` mildly penalizes the prompt's surfaced
+    records (+1 unengaged each — the "- repetition" term)
+  - `mind think` marks the voluntary thought (+0.3, revealed preference)
+  - `mind dream` folds the night's memory surfacings into recall counts
+  - records linked to open concerns/expectations get a Zeigarnik +1.0
+- `CalibosWorkspace.view()` now ranks the unpinned window by salience
+  instead of pure recency (pinned roots still lead; thought cap and dedupe
+  unchanged). Falls back to recency when no tracker is attached.
+- `mind status` shows the currently most-salient record.
+- Sidecar `salience.json` is local-only (gitignored); `mind init --force`
+  resets it alongside the store (record ids restart).
+
+### Design notes
+- Lazy all the way down: nothing decayed eagerly, nothing ever deleted —
+  low scores only sink records in the ranking. Backfill is lazy too
+  (created = record tick on first sight). Rehearsal folding is idempotent.
+- What we did NOT take (yet): Pretorius per-class caps + Jaccard dedupe
+  (fast follow for the workspace), Synapse's exact 4-factor weights
+  (cross-check, not transplant), compress_old [impression] stubs (waits
+  for the consolidation pass).
+
 ## 2026-09-24 — dreaming
 
 ### Added
