@@ -116,11 +116,25 @@ def _seed_dreamable(sub, n_memories=3):
             "expires": tick + 60, "depth": 1}]
 
 
-def test_sync_pin_immediate_handoff_through_real_dream_ticks(tmp_path, monkeypatch):
-    """Pin the invariant the side-channel rests on, through real dream
-    ticks: every think() call's resolver value (read at think entry) equals
-    the ids of the view built immediately before it — the event log must
-    read view->think->view->think with matching ids, never a stale view.
+def test_sync_pin_synchronous_single_view_handoff_assumption(tmp_path, monkeypatch):
+    """Pin the SYNCHRONICITY ASSUMPTION behind _last_view_ids, through real
+    dream ticks: the side-channel is trustworthy ONLY while view
+    construction and provider invocation remain synchronous and single-view
+    — the strict event order view->think with the resolver read at think
+    entry seeing exactly the immediately-preceding view's ids.
+
+    A future change breaks this invariant if it introduces async or
+    concurrent think() calls, buffered/deferred cognition, or a view()
+    rebuild before the provider consumes the previous view. When this test
+    fails for one of those reasons, the fix is to stop reading the
+    side-channel and use the staleness-proof record_ids carried on the view
+    itself (see the LOAD-BEARING SYNCHRONICITY ASSUMPTION note on
+    CalibosWorkspace._last_view_ids).
+
+    Mechanics verified here through real dream ticks: every think() call's
+    resolver value (read at think entry) equals the ids of the view built
+    immediately before it — the event log must read
+    view->think->view->think with matching ids, never a stale view.
 
     NOTE on machinery: CalibosSubject._restore rebuilds the workspace from
     the DB payload on EVERY _transaction (verified against the installed

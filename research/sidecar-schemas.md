@@ -38,7 +38,7 @@ Each entry in `experiences` is a `FeltExperience`:
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `source` | string | yes | One of the 8 engine sources (see §5) |
+| `source` | string | yes | One of the 8 engine sources (see §6) |
 | `first_person` | string | yes | The experience text as the subject would phrase it |
 | `record_id` | string | since 2026-09-25 | Private provenance: the workspace record id that surfaced. Stamped on every fragment experience; only `memory`-sourced ones are consumed by rehearsal. Never rendered into any cognitive view, prompt, or recall display |
 
@@ -114,7 +114,54 @@ formula are the public contract.
 
 ---
 
-## 3. Inbox — `inbox/prompt-NNNN.json` + `inbox/.seq`
+## 3. Interoception sidecar — `interoception.json`
+
+Felt body state for the interoceptive gap (2026-09-25): one felt float per
+need that chases the actual engine need with asymmetric lag plus seeded
+deterministic noise. `CalibosWorkspace.view()` re-renders body-derived
+interoception records from felt urgency; `mind status` shows felt bands.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `needs` | object | yes | Per-need felt state, keyed by need key (`hunger`, `thirst`, … — the 13 engine needs) |
+| `needs.<key>.felt` | float | yes | Felt value on the 0–1 need scale (0.5 = baseline); chases the actual with lag + noise |
+| `needs.<key>.last_tick` | int | yes | Engine tick of the last update (the post-heartbeat tick) |
+| `needs.<key>.level` | int | yes | Graded felt level 0–3 from felt urgency, with the engine's hysteresis (.45/.65/.85 thresholds, −.03 downward guard) — what views render |
+| `params` | object | yes | Update-rule parameters |
+| `params.rate_onset` | float | yes | Chase rate when felt moves away from baseline toward the actual (default 0.35) |
+| `params.rate_offset` | float | yes | Chase rate when felt returns toward baseline (default 0.12 — offset lags, like real interoception) |
+| `params.noise_scale` | float | yes | Seeded noise amplitude (default 0.01) |
+| `seed` | int | yes | Noise seed (default 0 — fixed, so identical tick/need sequences replay byte-identical) |
+
+**Update rule** (after each waking tick, never dream ticks — the body is
+frozen in sleep): for actual `a`, felt `f`: onset iff `(a − f)·(f − 0.5) > 0`
+(from exact baseline any movement is onset); `f' = clamp(f + (a − f)·rate +
+n, 0, 1)` with `n = noise_scale·(h − 0.5)·2`,
+`h = sha256(f"{seed}:{tick}:{key}")` as a float in [0, 1). No `random`
+module state, no wall clock. First contact starts at the 0.5 baseline.
+
+**View substitution:** records with `source == "interoception"` whose
+`concepts` carry a need key are re-rendered from felt urgency using the
+engine's graded vocabulary (`That feeling is easing.` /
+`I am beginning to notice this: …` / bare description /
+`It is hard to think past this: …`). Interoception records *without* a need
+key (recall unease, concern influence, prospective uncertainty) pass through
+byte-identical — there is no felt value for them, and none is invented.
+
+**Lifecycle:**
+- update: `cli._run_tick` after `subject.heartbeat()` (waking ticks only); `mind init --force` resets the sidecar (ids restart, stale felt must never attach to recycled ids)
+- read: `CalibosWorkspace.view()` substitution; `mind status` felt bands (`--raw` shows exact floats, diagnostics)
+- read-only commands (`mind drift`, `mind status`, `mind review`, …) never write it
+
+**Content vs format:** felt values are private phenomenology — what the
+subject feels its body to be, which may honestly differ from what drives
+it. Private, local-only, gitignored. The update rule, vocabulary, and
+schema are the public contract. Synthetic example in
+`examples/interoception.example.json`.
+
+---
+
+## 4. Inbox — `inbox/prompt-NNNN.json` + `inbox/.seq`
 
 Asynchronous cognition queue. During a heartbeat, instead of thinking
 inline, the engine's cognition call is captured by `InboxCognition.think`,
@@ -136,12 +183,41 @@ Prompt file schema:
 | `prompt` | string | yes | Rendered cognition prompt text (`cognitive_prompt(view)` from the frozen engine install — the template is engine-defined) |
 | `view_tick` | int \| null | yes | Engine tick sampled at queue time (null only when no clock wired, e.g. bare provider use) |
 | `view_sequence` | int \| null | yes | Workspace sequence sampled at queue time — the freshness anchor |
-| `experiences` | list[object] | yes | The cognitive view: `{"source", "first_person"}` entries, same shape as dream experiences (§1) |
+| `external` | bool | no | Present and `true` only on prompts queued via `mind queue` (`InboxCognition.queue_external`): the prompt text was authored outside a cognition view. Absent/`false` on engine-queued prompts. Drives the `answered-external:` origin stamp on the answering thought (subjective-transduction boundary) |
+| `experiences` | list[object] | yes | The cognitive view: `{"source", "first_person"}` entries, same shape as dream experiences (§1); each may also carry optional `record_id` (see below) |
+
+Each entry in `experiences` is a `FeltExperience`, with one optional addition
+over the engine shape:
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `source` | string | yes | One of the 8 engine sources (see §6) |
+| `first_person` | string | yes | The experience text as the subject would phrase it — for body interoceptions, the felt re-rendering, not the true record text |
+| `record_id` | string | since 2026-09-25 | Private provenance: the workspace record id that surfaced. Stamped at queue time by `InboxCognition.think`, from the ids traveling on the view object itself (primary — bound to the view, immune to stale side-channel reads) or the Bug C-style `track_view_ids` resolver wired by the CLI (fallback for foreign views). Never rendered into the prompt text the thinker sees — same private-provenance distinction as dream fragments (§1) |
+
+Rationale for `record_id`: `mind answer --silent` used to join prompt
+experiences back to records on exact `(source, first_person)` text, so the
+unengaged-salience penalty could be applied to surfaced-but-unanswered
+records. View substitution re-renders body interoception text from felt
+urgency, so the join silently missed exactly the records the interoception
+mutation exists to re-render — unanswered body records kept their salience
+and resurfaced. The id makes the join exact through substitution.
+Fail-closed conventions (mirroring Bug C): positional stamping, and on any
+length mismatch the id is omitted rather than misattributed. Matching rule
+in `cmd_answer`: prefer the id; an id naming no current record is skipped
+with **no** text fallback (falling back there would credit the wrong
+record); only id-less experiences — legacy prompts queued before
+2026-09-25, or `queue_external` prompts (externally authored text with no
+records behind it) — fall back to the `(source, first_person)` text join.
+Provenance is part of the queue-time bundle: `record_id` is stamped when a
+wired clock OR a wired view-id resolver is present; a provider with neither
+queues the legacy shape (no `record_id`), same as the dream path's
+unwired-resolver fragments.
 
 **Lifecycle:**
 - queue: `InboxCognition.think(view)` during `mind heartbeat`
 - list: `mind inbox` (reads all `prompt-*.json`, sorted)
-- answer: `mind answer <id>` consumes (deletes) the file, then `inject_thought(text, generated_by="answered:<id>@<tick>")`; the answered thought gains `+0.5` importance
+- answer: `mind answer <id>` consumes (deletes) the file, then `inject_thought(text, generated_by="answered:<id>@<tick>")`; the answered thought gains `+0.5` importance. Answers to external prompts (`"external": true`, queued via `mind queue`) are stamped `generated_by="answered-external:<id>@<tick>"` instead — the subjective-transduction boundary (see `calibos_mind/attribution.py`): externally authored assertions stay attributed external through rehearsal, dream fragments, and consolidation, and automatic consolidation never upgrades them to autobiographical standing
 - let pass: `mind answer <id> --silent` consumes the file and calls `note_unengaged` on each surfaced record instead
 - freshness: `check_prompt_fresh` refuses with `StalePromptError` when the workspace sequence has moved past `view_sequence` (records were added after queueing), or when `view_sequence` is absent. **There is no wall-clock TTL** — staleness is by workspace sequence, not elapsed time. A superseded prompt is discarded; if the matter recurs, the engine queues a fresh one.
 
@@ -151,7 +227,7 @@ are the public contract.
 
 ---
 
-## 4. Consolidation sidecars — `proposals/` and `archive/`
+## 5. Consolidation sidecars — `proposals/` and `archive/`
 
 Deterministic, model-free consolidation (`calibos_mind/consolidate.py`).
 Proposal-first: `mind consolidate` scans read-only and writes proposals;
@@ -159,7 +235,7 @@ nothing is archived until `mind consolidate --accept` is explicitly run.
 The SQLite store is never mutated — archive/availability state lives
 entirely in these sidecars.
 
-### 4a. Proposal journal — `proposals/proposals.json`
+### 5a. Proposal journal — `proposals/proposals.json`
 
 `{"seq": <int>, "proposals": {"<pid>": <proposal>}}`. `seq` is the monotonic
 proposal counter. Journal writes are atomic (tempfile + `os.replace`).
@@ -186,7 +262,7 @@ Accept is retry-safe: on any failure the proposal is left pending, never
 burned. Hashes are re-verified at accept time so a changed record can't be
 archived under a stale proposal.
 
-### 4b. Archive — `archive/memories.jsonl` (append-only)
+### 5b. Archive — `archive/memories.jsonl` (append-only)
 
 One JSON object per line, one per archive action:
 
@@ -199,7 +275,7 @@ One JSON object per line, one per archive action:
 | `proposal` | int \| null | yes | Proposal id, or `null` for direct `--quarantine` |
 | `original_text` | string | yes | The record's full text at archival — archive is restorable, never destructive |
 
-### 4c. Availability — `archive/availability.json`
+### 5c. Availability — `archive/availability.json`
 
 `{"excluded": {"<record-id>": {"archived_tick", "op", "reason", "proposal"}}}`.
 The journal of record for what is unavailable to cognition. `CalibosWorkspace.view()`
@@ -213,7 +289,7 @@ unavailable-never-deleted semantics are the public contract.
 
 ---
 
-## 5. Store — `mind.db` (overview)
+## 6. Store — `mind.db` (overview)
 
 SQLite. One table, one row:
 
@@ -250,7 +326,7 @@ Each workspace record (`SubjectiveExperience`, frozen dataclass):
 | `memory_links`, `concern_links`, `expectation_links` | list[string] | Link keys, set at creation, never cleared (records are frozen) |
 | `generated_by` | string \| null | Honest origin stamp: `cartridge`, `answered:<prompt-id>@<tick>`, `voluntary`, `cognition`, `dream-derived`, trigger keys, or a parent record id |
 | `private` | bool | Always true for these records |
-| `available_to_cognition` | bool | False removes the record from views (the availability mechanism in §4c works alongside this) |
+| `available_to_cognition` | bool | False removes the record from views (the availability mechanism in §5c works alongside this) |
 
 **Content vs format:** this is the private thought stream itself. Local-only,
 never committed, never quoted or summarized outside the machine. The table
@@ -258,7 +334,7 @@ shape, payload keys, and record fields are the public contract.
 
 ---
 
-## 6. Cartridge — `calibos.toml` (public, tracked)
+## 7. Cartridge — `calibos.toml` (public, tracked)
 
 The identity template others would adapt. Public by design — it contains no
 lived content, only temperament priors and structure.
@@ -278,7 +354,7 @@ lived content, only temperament priors and structure.
 
 ---
 
-## 7. Experiment manifest — what the fork must hash
+## 8. Experiment manifest — what the fork must hash
 
 For the planned matched-fork salience-causality test, the *physical* fork
 is a directory snapshot but the *scientific* fork is the manifest: every
@@ -288,6 +364,7 @@ branch-specific intervention. Components to enumerate (with SHA-256):
 **State (content-hashed):**
 - `mind.db` canonical payload — after WAL checkpoint and clean close (or via SQLite's backup API); never a live copy with `-wal`/`-shm` present
 - `salience.json`
+- `interoception.json` — felt body state (drives every interoception rendering in views and prompts; byte-identical replay required for identical tick/need sequences)
 - `inbox/` — every `prompt-*.json` plus `.seq`
 - `dreams/` — all fragment logs (rehearsal state derives from them)
 - `proposals/proposals.json` and `archive/` (`memories.jsonl` + `availability.json`) — availability shapes views
@@ -311,7 +388,7 @@ run rather than run on an incomplete manifest.
 
 ---
 
-## 8. Ambiguities found while documenting
+## 9. Ambiguities found while documenting
 
 1. **Dream fragment `parents`/`depth`:** passed through verbatim from the
    engine trigger dict; their exact id format and depth semantics are

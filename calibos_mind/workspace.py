@@ -30,11 +30,53 @@ zero new state.
 from __future__ import annotations
 
 import re
+from dataclasses import FrozenInstanceError
 
 from jelly_psiduck.workspace import CognitiveView, FeltExperience, SubjectiveWorkspace
 
 from .consolidate import excluded_ids
 from .unresolved import has_unresolved_links
+
+
+class _ViewWithIds(CognitiveView):
+    """A CognitiveView carrying the record ids behind its experiences.
+
+    The frozen engine's FeltExperience carries no record id, so a provider
+    that only sees the view cannot join prompt experiences back to the
+    records that surfaced — which ``mind answer --silent`` needs when view
+    substitution re-rendered an experience's text (felt != true). The ids
+    travel WITH the view, positionally: ``record_ids[i]`` is the record
+    behind ``experiences[i]``.
+
+    ``record_ids`` is deliberately NOT a dataclass field:
+    ``dataclasses.asdict()`` (which ``cognitive_prompt`` uses to render the
+    prompt text the thinker sees) only serializes declared fields, so the
+    ids can never leak into prompt text, displays, or recall — the same
+    private-provenance distinction as dream fragments. Binding the ids to
+    the view object also makes them immune to the stale-side-channel
+    hazard by construction: there is no cross-object temporal coupling for
+    a later ``think()`` to get wrong.
+
+    Readers must fail closed on length mismatch: omit the ids, never
+    misattribute.
+    """
+
+    __slots__ = ("record_ids",)
+
+    def __setattr__(self, name, value):
+        # Frozen like the base: the base's generated __setattr__ misfires
+        # on subclass instances (it closes over the pre-slots class), so
+        # enforce immutability explicitly.
+        raise FrozenInstanceError(
+            f"cannot assign to field {name!r}: view-carried provenance is immutable")
+
+
+def _view_with_ids(experiences, ids):
+    """Build a _ViewWithIds without tripping the frozen __setattr__."""
+    view = _ViewWithIds.__new__(_ViewWithIds)
+    object.__setattr__(view, "experiences", tuple(experiences))
+    object.__setattr__(view, "record_ids", tuple(ids))
+    return view
 
 VIEW_LIMIT = 16
 MAX_PINNED = 6
@@ -82,6 +124,20 @@ class CalibosWorkspace(SubjectiveWorkspace):
     # only sees the view cannot recover provenance without this. Set on every
     # view() call; read synchronously by DreamCognition.think() via the
     # resolver wired in cmd_dream. Never rendered into prompts or displays.
+    #
+    # LOAD-BEARING SYNCHRONICITY ASSUMPTION: this side-channel is trustworthy
+    # ONLY while workspace-view construction and provider invocation remain
+    # synchronous and single-view. Correctness rests on the strict event
+    # order view()->think()->view()->think(), with the resolver read at
+    # think entry seeing exactly the view built immediately before it (pinned
+    # by the event-order test in tests/adversarial/
+    # test_critic_dream_provenance_r1.py). A future change breaks it if it
+    # introduces async or concurrent think() calls (the resolver can read a
+    # racing view's ids), buffered or deferred cognition (a view consumed
+    # after its successor was built), or ANY view() rebuild before the
+    # provider consumes the previous view. If that changes, provenance must
+    # travel on the view itself (record_ids, already carried by
+    # _ViewWithIds and staleness-proof) instead of this side-channel.
     _last_view_ids: tuple = ()
     # Callable returning the set of currently-unresolved link keys (see
     # calibos_mind/unresolved.py). Attached by CalibosSubject from live engine
@@ -92,6 +148,25 @@ class CalibosWorkspace(SubjectiveWorkspace):
     # Records listed there are archived: history, never deleted, but excluded
     # from cognition views. None -> no exclusions (e.g. plain engine use).
     availability_path = None
+    # Attached by CalibosSubject when an interoception sidecar path is
+    # configured. None -> interoception records pass through untouched.
+    interoception_tracker = None
+
+    def _view_experience(self, r):
+        """FeltExperience for a record, with the interoceptive-gap substitution.
+
+        Body-derived interoception records are re-rendered from FELT urgency
+        (see calibos_mind/interoception.py): the thinker meets the felt body,
+        not the actual one. This is the last step of view construction —
+        record ids, salience, intensity, ordering, caps, dedupe, and archive
+        exclusions are all computed on the true records first, untouched.
+        """
+        tracker = self.interoception_tracker
+        if tracker is not None and r.source == "interoception":
+            text = tracker.text_for_record(r)
+            if text is not None:
+                return FeltExperience(r.source, text)
+        return FeltExperience(r.source, r.first_person)
 
     def view(self) -> CognitiveView:
         archived = (excluded_ids(self.availability_path)
@@ -105,9 +180,11 @@ class CalibosWorkspace(SubjectiveWorkspace):
         rest = [r for r in eligible if r.id not in pinned_ids]
         room = VIEW_LIMIT - len(pinned)
         if room <= 0:
-            self._last_view_ids = tuple(r.id for r in pinned[:VIEW_LIMIT])
-            return CognitiveView(tuple(FeltExperience(r.source, r.first_person)
-                                       for r in pinned[:VIEW_LIMIT]))
+            ids = tuple(r.id for r in pinned[:VIEW_LIMIT])
+            self._last_view_ids = ids
+            return _view_with_ids(
+                tuple(self._view_experience(r) for r in pinned[:VIEW_LIMIT]),
+                ids)
 
         tracker = self.salience_tracker
         if tracker is not None:
@@ -137,9 +214,13 @@ class CalibosWorkspace(SubjectiveWorkspace):
         # in order, before the FeltExperience conversion drops them. The
         # engine hands the provider the freshly built view immediately, so a
         # resolver reading this inside think() sees exactly this view's ids.
+        # The ids ALSO travel on the view itself (record_ids), so a provider
+        # that only ever sees the view can still join experiences to
+        # records — staleness-proof, no temporal coupling.
         self._last_view_ids = tuple(r.id for r in window)
-        return CognitiveView(tuple(FeltExperience(r.source, r.first_person)
-                                   for r in window))
+        return _view_with_ids(
+            tuple(self._view_experience(r) for r in window),
+            self._last_view_ids)
 
     def _dedupe(self, ranked):
         """Drop exact and near-duplicate texts, same source only.

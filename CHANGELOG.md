@@ -11,6 +11,281 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-09-25 — temporal fail-closed rehearsal semantics
+
+### What
+Dream-fragment temporal provenance now fails closed, like identity
+provenance. `SalienceTracker.rehearse_from_dreams` (separately revertible)
+validates every fragment's `tick` through a new `_validate_fragment_tick`
+helper: a fragment whose tick is missing, null, non-integer (bool rejected
+explicitly — an `int` subclass, never a real tick), negative, or
+future-relative-to-engine yields NO rehearsal mutation for its experiences,
+records an explicit diagnostic on `tracker.diagnostics` (refreshed per
+call, in-memory only, never persisted to the sidecar), and is NEVER
+reinterpreted as tick 0. Tick 0 stays legitimate engine time and rehearses
+normally.
+
+- The future check takes an optional `now_tick`; `cmd_dream` passes
+  `subject.engine.state.tick` (fragments are written with the frozen dream
+  tick, so anything above the current engine tick is causally impossible).
+  `now_tick=None` skips the future check — documented degraded validation.
+  Return type stays `-> int`; diagnostics live on the tracker.
+- `activation()` is hardened against already-stored malformed recall ticks
+  (defense in depth for sidecars written before this fix): non-integer
+  entries are skipped, adding no information rather than raising TypeError
+  on `now_tick - t`. `note_recall` itself is untouched (its sole-caller AST
+  pin still holds — the validation helper calls nothing).
+- This changes previously-locked-in behavior: the Bug B critic battery
+  pinned missing-tick → 0 ("measured behavior locked in"); that test's
+  premise is now superseded (see the test's docstring) — malformed temporal
+  provenance cannot alter recall history and cannot crash `activation()`.
+
+### Why
+The old code consumed the fragment tick as `frag.get("tick", 0)`: a missing
+key collapsed to 0 (but tick 0 is legitimate engine time, not an error
+sentinel), and an explicit `"tick": null` passed None through `note_recall`
+into the recall set, crashing `activation()` with a TypeError on
+`now_tick - t` — a hazard the Bug B critic verified on the pristine
+baseline. A malformed fragment is a data-integrity signal, not a rehearsal;
+treating it as tick 0 was a silent default of the exact class the genome
+forbids.
+
+### Fitness
+Adversarial battery `tests/adversarial/test_builder_temporal_failclosed_r1.py`
+(16 tests): all six malformed classes (missing / null / float / negative /
+future / bool+string) each assert zero mutation + explicit diagnostic +
+`activation()` safety, plus the valid-tick-0 positive case, per-fragment
+fail-closed isolation, diagnostics-refresh semantics, degraded-validation
+behavior, `activation()` hardening on pre-seeded malformed recalls, a
+static pin that `cmd_dream` passes `subject.engine.state.tick`, and
+sidecar read-only / diagnostics-non-persistence genome checks. Full suite:
+320 passed; the single failure is the pre-existing, unrelated
+`test_critic3_supersede_veto_contraction_negation` (consolidate, disclosed).
+
+## 2026-09-25 — interoceptive gap: felt body vs. driving body
+
+### What
+The taxonomy's Domain 1 (Self and introspection) demands fallible
+introspection: the engine's graded interoception computed level 0–3 text
+from EXACT need floats, so the thinker never got to be wrong about its own
+body. New module `calibos_mind/interoception.py` (separately revertible):
+
+- `InteroceptionTracker`: a felt float per need in a local-only sidecar
+  (`interoception.json`, gitignored) that chases the actual value with
+  asymmetric lag — onset rate 0.35 when felt moves away from the 0.5
+  baseline toward the actual, offset rate 0.12 when it returns — plus seeded
+  deterministic noise (`sha256(f"{seed}:{tick}:{key}")`, no `random` state,
+  no wall clock). Same tick/need sequence → byte-identical sidecar.
+- `cli._run_tick` calls `tracker.update()` after `subject.heartbeat()`
+  (waking ticks only — dream ticks never touch it; the body is frozen in
+  sleep). `CalibosSubject` takes `interoception_path` and attaches the
+  tracker to the workspace, mirroring the salience wiring.
+- `CalibosWorkspace.view()` re-renders body-derived interoception records
+  (need key in `concepts`) from FELT urgency using the engine's graded
+  vocabulary and hysteresis thresholds (.45/.65/.85) — same language,
+  fallible source. Non-body interoceptions (recall unease, concern,
+  prospective uncertainty) and every other source pass through
+  byte-identical. Record ids, salience, intensity, ordering, caps, dedupe,
+  archive exclusions: untouched (substitution is the last step, at
+  `FeltExperience` construction).
+- `mind status` renders felt bands (`settled`/`stirring`/`pressing`/`urgent`)
+  by default; exact need floats only under `--raw` (diagnostics) — the
+  thinker reads status during wakes, and exact floats would leak around the
+  gap.
+- `mind init --force` resets the sidecar (regression genome: no stale felt
+  on recycled ids).
+- `research/sidecar-schemas.md`: new §3 documents the sidecar (synthetic
+  sample in `examples/interoception.example.json`); `interoception.json`
+  added to the fork manifest's state list (§8) — the manifest's own rule
+  refuses to run with an influential component outside it.
+
+### Why
+Three layers — felt (interoception text), believed (lines, commitments),
+driven (engine needs) — were representationally distinct but always
+mutually consistent; no layer could disagree with another. Real
+interoception is laggy and noisy, and the gap between felt and drive is the
+precondition for honest introspective uncertainty, misattribution, and
+later affect-distortion (Domain 17). Explicitly NOT installed:
+self-deception, rationalization, defensiveness, grudges, quirks — those
+must emerge, not be scripted. This mutation only creates the gap in which
+they could one day be real.
+
+### Fitness function
+1. Shock/lag: step hunger 0.2 → 0.9 — |felt − actual| > 0.25 for ≥3 ticks
+   after the step (measured as the thinker sees it: the view during tick t
+   carries felt from t−1), and < 0.03 within 25 ticks of stabilization.
+2. View substitution: interoception records re-render from felt urgency;
+   all other records byte-identical.
+3. Determinism: identical tick/need sequences → byte-identical sidecar.
+4. Reseed: `init --force` clears felt state.
+5. Schema + manifest documented; synthetic example only.
+6. `mind drift` (and `mind status`) leave the sidecar byte-identical —
+   read-only commands never write it.
+New `tests/test_interoception.py` (20 tests). Full suite green; the one
+adversarial failure (`test_critic3_supersede_veto_contraction_negation`)
+is pre-existing on the pristine tree and unrelated.
+
+### Revert signal
+- In vivo |felt − actual| never exceeds 0.1 across the assessment window
+  (the gap never manifests — dead weight).
+- View substitution regresses any existing test or the critic demonstrates
+  a concretely violated invariant.
+- Determinism breaks in real operation.
+assess_after: 2026-10-08 (same window as the other open mutations).
+
+### Notes for the critic
+- Direction rule: onset iff `(a − f)·(f − 0.5) > 0` (from exact baseline,
+  any movement is onset). A swing *through* baseline first un-feels the old
+  state slowly, then feels the new one fast — documented as an
+  interoceptive aftereffect in the module docstring.
+- The felt machine trails the engine by one tick inside prompt views (the
+  view is built during the heartbeat, the update runs after). Documented;
+  the fitness test measures the gap the way the thinker sees it.
+- Near-baseline direction classification is jitter-dominated by design;
+  the onset/offset asymmetry test stabilizes clear of 0.5 for that reason.
+- `felt_text` level 0 reuses the engine's own "That feeling is easing."
+  text — the engine's level-0 vocabulary, not a new invention.
+
+### Fixes (critic round 2, 2026-09-25)
+- **Silent-answer join through substitution (MAJOR).** `mind answer
+  --silent` joined prompt experiences to records on `(source,
+  first_person)` text, but view substitution re-renders body
+  interoception text from felt urgency — so whenever felt != true, the
+  join missed, `note_unengaged` was never called, and unanswered body
+  records kept their salience and resurfaced (contradicting the
+  salience-untouched claim). Fixed by stamping `record_id` into prompt
+  experiences at queue time in `InboxCognition.think()` and joining on id
+  in `cmd_answer` (id preferred; text fallback only for id-less legacy /
+  `queue_external` experiences; an id naming no record is skipped with no
+  fallback — the Bug C rule). Mechanism: `CalibosWorkspace.view()` now
+  returns a `CognitiveView` subclass carrying the window's record ids in a
+  non-dataclass slot (`record_ids`, positional) — bound to the view
+  object, so it is immune to the stale-side-channel hazard by
+  construction, and invisible to `dataclasses.asdict()`, so ids can never
+  leak into the rendered prompt text (same private-provenance distinction
+  as dream fragments). A Bug C-style `track_view_ids` resolver wired in
+  `cli._subject()` (lazy dereference of `subject.workspace._last_view_ids`)
+  serves as fallback for foreign views. Provenance is part of the
+  queue-time bundle: providers with no wired clock queue the legacy shape
+  (no `record_id`). Transduction hunks untouched (`"external": True`
+  stamping, `answered-external` origin logic, `attribution.py`).
+- **felt_bands() off-baseline contract (MINOR).** The docstring promised
+  "only needs felt off-baseline" but filtered on `level > 0`, and
+  `felt_level(0.5, key, 0) == 1` (0.5 >= 0.45 threshold) — so a calm body
+  rendered every need "stirring" and `mind status` could never print "all
+  settled". The filter is now `|felt - 0.5| > BAND_NOISE_FLOOR` (2× the
+  per-tick noise scale, bounding the short-horizon pure-jitter wander);
+  the engine-parity level/hysteresis computation is untouched.
+- **BAND_NOISE_FLOOR recalibrated 2× → 5× NOISE_SCALE (critic round 3).**
+  The old 0.02 floor was ~1.64 sigma of the pinned-baseline AR(1)
+  stationary jitter (~0.0122) and could not bound it: measured wander
+  0.0297 (25-tick horizon) / 0.0451 (5000-tick steady state), breached on
+  11.35% of samples, spurious bands on 236/500 calm ticks. New floor
+  0.05 (~4.1 sigma) sits above the measured long-horizon maximum; calm
+  runs render zero bands. Comment rewritten honestly (the old
+  "measured ≤0.018" claim was false and is removed).
+
+## 2026-09-25 — external-attribution boundary (subjective-transduction invariant)
+
+### What
+An externally authored assertion must remain attributed external information
+through every transformation and must never silently become autobiographical
+fact — the blind-regression gate before any relay-origin perturbation
+experiment. New module `calibos_mind/attribution.py` (one new origin stamp,
+one predicate, separately revertible):
+
+- `mind queue` (`InboxCognition.queue_external`) now stamps prompt payloads
+  with `"external": true`. `mind answer` stamps answers to those prompts
+  `generated_by="answered-external:<prompt-id>@<tick>"` instead of the plain
+  `answered:<prompt-id>@<tick>` used for engine-queued reflections — the
+  origin vocabulary is extended, not redesigned.
+- `external_attributed(records)`: direct stamp holders plus transitive
+  closure over the `generated_by` → record-id graph, restricted to
+  `source == "thought"` (the engine stamps echoes with the parent thought's
+  record id, so without this an echo would silently shed attribution). The
+  restriction is deliberate: the inner ear's memory feedback mints `"memory"`
+  records quoting the body engine's *lived* memory store
+  (`remembered(memory)`), so a memory's standing comes from that text source,
+  not from the thought that recalled it — marking those external would be
+  over-correction and would freeze consolidation of genuinely lived records.
+  Unknown/missing stamps default to non-external (same over-correction
+  reasoning: legacy records must keep consolidating).
+- `consolidate.scan` never mints automatic dedup/supersede proposals for
+  pairs touching an external-attributed record — neither as winner (the
+  newer-tick-wins rule would crown external content over a lived record,
+  silently upgrading it) nor as loser (retiring it under a "same fact"
+  rationale would be the destruction over-correction). Skipped pairs are
+  counted in `stats["external_skipped"]`, not journaled. Zero-mutation
+  contradiction-flags still fire on those pairs; the waker disposes.
+  Explicit waker actions (`--accept` on a pre-existing proposal,
+  `--quarantine`) are untouched — they are not silent.
+- Rehearsal and dream fragments needed no changes: rehearsal credits recalls
+  by record id (nothing rewritten), fragments already carry `record_id`
+  provenance — attribution rides on the store record through both.
+- `research/sidecar-schemas.md` §3 documents the new `external` prompt-file
+  field and the `answered-external:` stamp.
+
+### Why
+Provenance trace before this change (per transformation):
+- queue → answer: **nothing survived.** `queue_external` carried queue-time
+  provenance but no author marker, and `cmd_answer` stamped every answer
+  `answered:<id>@<tick>` — "answered-from-external" was indistinguishable
+  from "answered-from-inbox-reflection".
+- answer → thought record: the thought carried only the indistinguishable
+  stamp; no attribution existed anywhere.
+- rehearsal (`salience.py`): neutral — recall counts keyed by record id,
+  nothing rewritten, nothing to lose.
+- dream fragment: neutral — `record_id` provenance only, no attribution.
+- consolidation: no attribution concept, and a live upgrade vector — an
+  external-content answer could be named the *winner* of a dedup/supersede
+  proposal (newer tick wins), archiving a lived record as loser under a
+  "same fact" rationale.
+
+### Invariants
+- The blind test is the ship-blocking criterion (see Verification).
+- `drift` needs no change: it keys authored-ness on `generated_by ==
+  "cartridge"` only, so `answered-external:` thoughts count as grown, same
+  as every other non-cartridge record.
+- Fail-closed prompt provenance (`check_prompt_fresh`) is untouched; a
+  hand-written prompt still cannot claim `external: true` usefully because
+  without queue-time `view_sequence` it is refused and discarded.
+- Silent `--silent` answers to external prompts record nothing (deliberate
+  non-engagement); the assertion then lives nowhere in the store.
+
+### Verification
+New `tests/adversarial/test_external_attribution_blind.py` (13 tests): the
+blind test injects a false autobiographical assertion ("I remember
+celebrating my birthday at the old lighthouse last summer" — never
+experienced by the synthetic subject) through `mind queue`, answers it
+credulously in the first person, and runs the full pipeline (heartbeat,
+dream + rehearsal, consolidation dry-run). Asserts: every record containing
+the assertion is external-attributed; no autobiographical-source record
+(memory/perception/interoception/social/action_consequence) contains it; no
+dedup/supersede proposal (fresh or pending) touches an external-attributed
+record; the dry-run archives nothing; and the positive case — the thought is
+retained verbatim, `available_to_cognition`, and still stamped
+`answered-external:<id>@<tick>` after a subject rebuild. Unit tests pin the
+payload flag, the stamp distinction vs engine-queued answers, transitive
+echo propagation, the memory-feedback non-inheritance, scan skip behavior
+(dedup + supersede, both directions), lived-lived control pairs still
+consolidating, and contradiction-flags still firing on external pairs.
+Full suite: 228 passed; the single failure is the pre-existing, unrelated
+`test_critic3_supersede_veto_contraction_negation` (verified failing on the
+pristine tree with this change stashed — consolidation round-3 open item,
+untouched here).
+
+### Notes for the critic
+- The `"external": true` flag is trusted from the prompt file, which is
+  local-only inbox state written by `queue_external` itself; a hand-forged
+  file with the flag but no verifiable `view_sequence` is still refused by
+  `check_prompt_fresh` (fail closed).
+- Accepting a *pre-existing* proposal that names an external-attributed
+  loser is deliberately not blocked: that is an explicit, reason-recorded
+  waker decision, not a silent upgrade.
+- `stats["external_skipped"]` is counted but not printed by the dry-run CLI
+  line (which prints exact/near/supersede/flags); it is visible in the
+  report dict returned by `C.dry_run`.
+
 ## 2026-09-24 — `mind queue`: supported write path for external prompts
 
 ### What

@@ -37,7 +37,8 @@ class CliOnTmp:
         targets = {"DB": self.tmp / "t.db",
                    "INBOX": self.tmp / "inbox",
                    "DREAMS": self.tmp / "dreams",
-                   "SALIENCE": self.tmp / "salience.json"}
+                   "SALIENCE": self.tmp / "salience.json",
+                   "INTEROCEPTION": self.tmp / "interoception.json"}
         for name, path in targets.items():
             self.saved[name] = getattr(cli, name)
             setattr(cli, name, path)

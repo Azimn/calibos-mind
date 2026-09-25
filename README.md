@@ -25,7 +25,7 @@ always a valid answer.
     ./mind dream [--ticks N]        # sleep: dream ticks, no outside world; body/tick/conduct frozen, fragments logged not thought
     ./mind recall [n]               # review recent dream fragments
     ./mind resolve <id> [--released] # close a commitment (done, or released)
-    ./mind status                    # tick, needs, open loops, inbox depth
+    ./mind status [--raw]            # tick, felt need bands (exact floats under --raw), open loops, inbox depth
     ./mind review [n]                # recent private thoughts
     ./mind drift [--window N]        # persona-drift signals (read-only)
     ./mind consolidate [--list]      # dry-run consolidation scan (read-only); proposals to journal

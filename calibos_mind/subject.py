@@ -36,8 +36,9 @@ def validate_thought_text(text: str) -> str:
 
 
 class CalibosSubject(EndogenousSubject):
-    def __init__(self, *args, salience_path=None, **kwargs):
+    def __init__(self, *args, salience_path=None, interoception_path=None, **kwargs):
         self._salience_path = salience_path
+        self._interoception_path = interoception_path
         self._dreaming = False
         super().__init__(*args, **kwargs)
         # Fresh stores get a stock workspace from __init__; existing stores are
@@ -45,6 +46,7 @@ class CalibosSubject(EndogenousSubject):
         if not isinstance(self.workspace, CalibosWorkspace):
             self.workspace = CalibosWorkspace.from_dict(self.workspace.to_dict())
         self._attach_salience()
+        self._attach_interoception()
 
     def _attach_salience(self):
         if self._salience_path is not None:
@@ -54,6 +56,15 @@ class CalibosSubject(EndogenousSubject):
         # so workspace.view() intersects links against what is actually open.
         self.workspace.open_keys_provider = self._live_open_keys
 
+    def _attach_interoception(self):
+        # Felt body state for the interoceptive gap (see interoception.py).
+        # The tracker constructor only reads the sidecar; felt values move
+        # exclusively via update()+save() on the waking-tick path.
+        if self._interoception_path is not None:
+            from .interoception import InteroceptionTracker
+            self.workspace.interoception_tracker = InteroceptionTracker(
+                self._interoception_path)
+
     def _live_open_keys(self) -> set[str]:
         from .unresolved import live_open_keys
         return live_open_keys(self.engine.state, self.continuity.state)
@@ -62,6 +73,7 @@ class CalibosSubject(EndogenousSubject):
         super()._restore(raw)
         self.workspace = CalibosWorkspace.from_dict(raw["workspace"])
         self._attach_salience()
+        self._attach_interoception()
         self.trigger = {"kind": "none", "parents": [], "depth": 0}
 
     def _add(self, source, text, **metadata):
@@ -171,10 +183,12 @@ class CalibosSubject(EndogenousSubject):
 
         Used for answering queued cognition prompts and for voluntary thinking.
         generated_by stamps the honest origin: "answered:<prompt-id>@<tick>"
-        for inbox answers, "voluntary" for unprompted thinking, "cognition"
-        for thoughts the engine's own heartbeat produced (e.g. a live model
-        provider). Echoes that resurface while asleep are stamped
-        "dream-derived" by _add, not here. Returns the thought's record id.
+        for inbox answers, "answered-external:<prompt-id>@<tick>" for answers
+        to externally-authored prompts (`mind queue`), "voluntary" for
+        unprompted thinking, "cognition" for thoughts the engine's own
+        heartbeat produced (e.g. a live model provider). Echoes that
+        resurface while asleep are stamped "dream-derived" by _add, not here.
+        Returns the thought's record id.
         """
         text = validate_thought_text(text)
         with self._transaction():

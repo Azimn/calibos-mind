@@ -63,7 +63,13 @@ cap is reported in the dry-run output, never silent.
 created_tick is the record's store tick (same semantics as the salience
 sidecar). Origin stamps (generated_by) are honored where relevant: the
 identity root — the earliest cartridge-authored record, the load-bearing
-self-anchor — can never be named the loser of an automatic proposal.
+self-anchor — can never be named the loser of an automatic proposal, and
+records attributable to externally-authored content (see
+calibos_mind/attribution.py) never take part in automatic dedup/supersede
+at all — neither as winner (which would silently upgrade external content
+over lived records) nor as loser (which would retire it under a "same
+fact" rationale). Contradiction-flags still fire on those pairs: zero
+mutation, the waker disposes.
 """
 from __future__ import annotations
 
@@ -75,6 +81,8 @@ import sqlite3
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from .attribution import external_attributed
 
 # -- tuning (from the deep-dive §3e verdict table) ------------------------
 
@@ -554,17 +562,32 @@ def scan(records: list[_Rec], store_tick: int, journal: dict,
     """
     root_id = identity_root_id(records)
     cands = _candidates(records, excluded)
+    # Subjective-transduction boundary: ids attributable to
+    # externally-authored content. Automatic dedup/supersede never touches
+    # them (see emit()); contradiction-flags still fire (zero mutation).
+    ext = external_attributed(records)
     seen_pairs = {(p["kind"], min(p["a"], p["b"]), max(p["a"], p["b"]))
                   for p in journal["proposals"].values()}
     slated: set[str] = set()   # ids named loser by a proposal this run
     new_props: list[dict] = []
     stats = {"records": len(records), "candidates": len(cands),
              "pairs": 0, "capped": False,
-             "exact": 0, "near": 0, "supersede": 0, "flags": 0}
+             "exact": 0, "near": 0, "supersede": 0, "flags": 0,
+             "external_skipped": 0}
 
     def emit(kind, a, b, winner, loser, rationale, reason, confidence):
         if loser is not None and loser.id == root_id:
             return  # the identity root is never an automatic loser
+        if kind in ("dedup", "supersede") and (a.id in ext or b.id in ext):
+            # Never silently upgrade external-attributed content to
+            # autobiographical standing: it may neither be crowned winner
+            # over a lived record (newer-tick-wins would do exactly that)
+            # nor retired as loser under a "same fact" rationale (the
+            # destruction over-correction). The pair is skipped, counted,
+            # and left for the waker — contradiction-flags below still
+            # surface genuine conflicts for review.
+            stats["external_skipped"] += 1
+            return
         key = (kind, min(a.id, b.id), max(a.id, b.id))
         if key in seen_pairs:
             return

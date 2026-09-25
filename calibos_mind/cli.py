@@ -13,7 +13,7 @@ indefinitely. Quick reference:
     mind dream [--ticks N]             sleep: dream ticks, no outside world; body/tick/conduct frozen, fragments logged not thought
     mind recall [n]                    review recent dream fragments
     mind resolve <id> [--released]     close a commitment (done, or released)
-    mind status                        tick, needs, open loops, inbox depth
+    mind status [--raw]              tick, felt need bands (exact floats under --raw), open loops, inbox depth
     mind review [n]                    recent private thoughts
     mind drift [--window N]            persona-drift signals (grown/authored salience, trigger KL)
     mind consolidate [--list]          dry-run consolidation scan (read-only); dedup/supersede/flag proposals to journal
@@ -39,6 +39,7 @@ DB = BASE / "mind.db"
 INBOX = BASE / "inbox"
 DREAMS = BASE / "dreams"
 SALIENCE = BASE / "salience.json"
+INTEROCEPTION = BASE / "interoception.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
@@ -66,12 +67,22 @@ def _subject(provider=None):
     if provider is None:
         provider = InboxCognition(INBOX)
     subject = CalibosSubject(DB, cartridge, cognition=provider,
-                             salience_path=SALIENCE)
+                             salience_path=SALIENCE,
+                             interoception_path=INTEROCEPTION)
     if isinstance(provider, InboxCognition):
         # Stamp queued prompts with the store tick and record sequence at
         # queue time, so `mind answer` can refuse superseded views.
         provider.track_queue_time(
             lambda: (subject.engine.state.tick, subject.workspace.sequence))
+        # Fallback provenance for the --silent join (Bug C-style channel):
+        # the resolver reads the workspace's transient view-build
+        # side-channel synchronously inside think(). The primary channel is
+        # the ids traveling on the view object itself (staleness-proof);
+        # this covers views not built by CalibosWorkspace. The lambda
+        # dereferences subject.workspace lazily — the workspace object is
+        # rebuilt from the DB payload every transaction, so an eager
+        # capture would stamp dead ids.
+        provider.track_view_ids(lambda: subject.workspace._last_view_ids)
     # Archived records stay in history but leave cognition views; the
     # journal starts empty so this changes nothing until something is
     # accepted or quarantined.
@@ -104,6 +115,8 @@ def cmd_init(args):
     # never attach to recycled ids (same bug class as the salience reset).
     from .salience import SalienceTracker
     SalienceTracker(SALIENCE).reset()
+    from .interoception import InteroceptionTracker
+    InteroceptionTracker(INTEROCEPTION).reset()
     if PROPOSALS.exists():
         for child in PROPOSALS.iterdir():
             if child.is_file():
@@ -142,6 +155,14 @@ def cmd_note(args):
 def _run_tick(subject):
     before = len(subject.inspect()["trace"])
     result = subject.heartbeat()
+    # Interoceptive gap: after each waking tick the felt body chases the
+    # actual needs with lag + seeded noise. Never on dream ticks (the body
+    # is frozen in sleep) — dream_tick() does not come through here.
+    tracker = subject.workspace.interoception_tracker
+    if tracker is not None:
+        tracker.update(dict(subject.engine.state.needs),
+                       subject.engine.state.tick)
+        tracker.save()
     state = subject.inspect()
     new = state["trace"][before:]
     triggers = [t["trigger"]["kind"] for t in new if t["kind"] == "cognition_trigger"]
@@ -215,12 +236,24 @@ def cmd_answer(args):
         print(f"{args.id}: refused — {exc}; prompt discarded.")
         return 1
     records = _record_map(subject)
+    by_id = records
     by_text = {(r["source"], r["first_person"]): r for r in records.values()}
     if args.silent:
         # Surfaced but not engaged: mild penalty, so unanswered material
-        # sinks instead of recurring forever.
+        # sinks instead of recurring forever. The join prefers the
+        # queue-time record_id — exact even when view substitution
+        # re-rendered the experience text (felt != true). Id-less
+        # experiences (legacy prompts, queue_external) fall back to the
+        # text join. An id naming no current record is skipped with no
+        # text fallback: crediting the wrong record is the hazard being
+        # fixed (same rule as the dream-rehearsal path).
         for e in payload["experiences"]:
-            r = by_text.get((e["source"], e["first_person"]))
+            r = None
+            rid = e.get("record_id")
+            if rid is not None:
+                r = by_id.get(rid)
+            else:
+                r = by_text.get((e["source"], e["first_person"]))
             if r is not None:
                 tracker.note_unengaged(r["id"], r["tick"])
         tracker.save()
@@ -228,9 +261,15 @@ def cmd_answer(args):
         return 0
     tid = None
     try:
+        # Subjective-transduction boundary: an answer to an
+        # externally-authored prompt keeps the external attribution on the
+        # thought record itself ("answered-external:"), so the assertion
+        # can never silently pass as a lived reflection ("answered:").
+        origin = ("answered-external" if payload.get("external")
+                  else "answered")
         tid = subject.inject_thought(
             args.text, trigger_kind="answered",
-            generated_by=f"answered:{args.id}@{now}")
+            generated_by=f"{origin}:{args.id}@{now}")
     except ValueError as exc:
         # The prompt is already consumed; refuse cleanly instead of a traceback.
         print(f"{args.id}: refused — {exc}; nothing recorded.")
@@ -308,10 +347,19 @@ def cmd_status(args):
     eng = state["engine"]
     inbox_n = len(list(INBOX.glob("prompt-*.json")))
     print(f"tick {eng['tick']} | inbox {inbox_n} waiting | pending events {len(state['pending'])}")
-    needs = eng["needs"]
-    notable = {k: round(v, 2) for k, v in needs.items()
-               if abs(v - 0.5) > 0.25}
-    print(f"needs (off-baseline): {notable or 'all settled'}")
+    tracker = subject.workspace.interoception_tracker
+    if args.raw or tracker is None:
+        # --raw: exact need floats, diagnostics only. Without a tracker there
+        # is no felt state to report, so the pre-mutation display stands.
+        needs = eng["needs"]
+        notable = {k: round(v, 2) for k, v in needs.items()
+                   if abs(v - 0.5) > 0.25}
+        print(f"needs (off-baseline): {notable or 'all settled'}")
+    else:
+        # Default: felt bands. The thinker reads `mind status` during wakes;
+        # exact floats would leak actual values around the interoceptive gap.
+        bands = tracker.felt_bands()
+        print(f"needs (felt): {bands or 'all settled'}")
     cont = state["continuity"]
     for cid, c in cont["commitments"].items():
         if c["status"] in {"open", "overdue"}:
@@ -420,7 +468,8 @@ def cmd_dream(args):
     # Dreams rehearse: fold the night's memory surfacings into salience.
     tracker = _tracker(subject)
     records = list(_record_map(subject).values())
-    rehearsed = tracker.rehearse_from_dreams(DREAMS, records)
+    rehearsed = tracker.rehearse_from_dreams(
+        DREAMS, records, now_tick=subject.engine.state.tick)
     tracker.prune({r["id"] for r in records})
     tracker.save()
     print(f"dreamed {args.ticks} ticks → {total} fragments in dreams/{log_path.name} "
@@ -634,6 +683,8 @@ def main(argv=None):
     p.set_defaults(func=cmd_resolve)
 
     p = sub.add_parser("status", help="what is on my mind")
+    p.add_argument("--raw", action="store_true",
+                   help="show exact need floats instead of felt bands (diagnostics)")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("review", help="recent private thoughts")

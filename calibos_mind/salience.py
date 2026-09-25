@@ -31,6 +31,44 @@ IMPORTANCE_WEIGHT = 0.6   # how much engaged importance lifts a record
 UNENGAGED_PENALTY = 0.25  # per surfacing let pass without a thought
 UNRESOLVED_BOOST = 1.0    # record linked to an open concern/expectation (Zeigarnik)
 
+# Sentinel distinguishing a missing "tick" key from an explicit null.
+_MISSING = object()
+
+# Diagnostic reasons emitted when a dream fragment's tick fails validation.
+# Each entry appended to SalienceTracker.diagnostics is
+# {"reason": <one of these>, "raw": <the offending value or None>,
+#  "log": <filename>, "line": <1-based line number>}.
+TICK_REJECT_MISSING = "missing_tick"
+TICK_REJECT_NULL = "null_tick"
+TICK_REJECT_NON_INTEGER = "non_integer_tick"
+TICK_REJECT_NEGATIVE = "negative_tick"
+TICK_REJECT_FUTURE = "future_tick"
+
+
+def _validate_fragment_tick(raw, now_tick: int | None):
+    """Fail-closed validation of a dream fragment's temporal provenance.
+
+    Returns ``(tick, None)`` when the tick is a legitimate engine tick, or
+    ``(None, reason)`` when it must not feed rehearsal. Tick 0 is
+    legitimate engine time, never an error sentinel — it rehearses
+    normally. ``bool`` is rejected explicitly (it is an ``int`` subclass
+    but never a real tick); floats, strings, and every other non-int type
+    are rejected too. The future check runs only when ``now_tick`` is
+    provided; when it is None the check is skipped (documented degraded
+    validation) and every otherwise-valid tick passes.
+    """
+    if raw is _MISSING:
+        return None, TICK_REJECT_MISSING
+    if raw is None:
+        return None, TICK_REJECT_NULL
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None, TICK_REJECT_NON_INTEGER
+    if raw < 0:
+        return None, TICK_REJECT_NEGATIVE
+    if now_tick is not None and raw > now_tick:
+        return None, TICK_REJECT_FUTURE
+    return raw, None
+
 
 class SalienceTracker:
     def __init__(self, path: str | Path):
@@ -44,6 +82,13 @@ class SalienceTracker:
                     self.data.setdefault("records", {})
             except (ValueError, OSError):
                 pass
+        # Explicit per-call diagnostics from rehearse_from_dreams: a list of
+        # dicts, refreshed on every call (not accumulated), in-memory only —
+        # never persisted to the sidecar file. Each entry names the rejection
+        # reason, the offending value, and the log/line the fragment came
+        # from, so a malformed fragment is observable and testable rather
+        # than a silent skip.
+        self.diagnostics: list[dict] = []
 
     # -- events -----------------------------------------------------------
 
@@ -91,7 +136,13 @@ class SalienceTracker:
                    unresolved: bool = False) -> float:
         e = self._entry(rid, created_tick)
         times = [max(now_tick - created_tick, 1)]
-        times += [max(now_tick - t, 1) for t in e["recalls"]]
+        # Defense in depth: sidecars written before fail-closed temporal
+        # validation (missing keys collapsed to 0, explicit nulls passed
+        # through) may carry malformed recall ticks. They must never crash
+        # view construction: non-integer entries are skipped here, adding
+        # no information rather than raising TypeError on ``now_tick - t``.
+        times += [max(now_tick - t, 1) for t in e["recalls"]
+                  if isinstance(t, int) and not isinstance(t, bool)]
         base = math.log(sum(t ** -DECAY for t in times))
         return (base
                 + IMPORTANCE_WEIGHT * e["importance"]
@@ -100,7 +151,8 @@ class SalienceTracker:
 
     # -- rehearsal --------------------------------------------------------
 
-    def rehearse_from_dreams(self, dream_dir: str | Path, records: list[dict]) -> int:
+    def rehearse_from_dreams(self, dream_dir: str | Path, records: list[dict],
+                               now_tick: int | None = None) -> int:
         """Fold dream-fragment memory surfacings into recall counts.
 
         Provenance: a memory experience carrying ``record_id`` is matched by
@@ -110,6 +162,23 @@ class SalienceTracker:
         (written before record_id existed) fall back to exact
         (source, first_person) text matching.
 
+        Temporal provenance fails closed, like identity provenance: a
+        fragment whose ``tick`` is missing, null, non-integer (including
+        bool — an int subclass, rejected explicitly), negative, or
+        future-relative-to-engine yields NO rehearsal mutation for any of
+        its experiences and records an explicit diagnostic on
+        ``self.diagnostics`` (refreshed per call, in-memory only). Tick 0
+        is legitimate engine time, never an error sentinel — it rehearses
+        normally. There is no reinterpretation as tick 0, ever.
+
+        ``now_tick`` is the now-reference for the future check: fragment
+        ticks above it are causally impossible (fragments are written with
+        the frozen dream tick, so anything above the current engine tick
+        cannot have happened) and are rejected. When ``now_tick`` is None
+        the future check is skipped — documented degraded validation.
+        The sole CLI caller (``cmd_dream``) passes
+        ``subject.engine.state.tick``.
+
         Idempotent: reprocessing a log re-adds nothing (recalls are a set of
         ticks), and the returned count is idempotent too — it counts each
         distinct (record, tick) pair exactly once across reprocessings. Only
@@ -117,18 +186,32 @@ class SalienceTracker:
         """
         by_id = {r["id"]: r for r in records}
         by_text = {(r["source"], r["first_person"]): r for r in records}
+        self.diagnostics = []
         n = 0
         for path in sorted(Path(dream_dir).glob("*.jsonl")):
             try:
                 lines = path.read_text(encoding="utf-8").splitlines()
             except OSError:
                 continue
-            for line in lines:
+            for lineno, line in enumerate(lines, start=1):
                 if not line.strip():
                     continue
                 try:
                     frag = json.loads(line)
                 except ValueError:
+                    continue
+                raw_tick = frag.get("tick", _MISSING)
+                tick, reason = _validate_fragment_tick(raw_tick, now_tick)
+                if reason is not None:
+                    # Fail closed: no rehearsal mutation for this fragment's
+                    # experiences, and an explicit, testable diagnostic —
+                    # never a silent skip, never a reinterpreted tick 0.
+                    self.diagnostics.append({
+                        "reason": reason,
+                        "raw": None if raw_tick is _MISSING else raw_tick,
+                        "log": path.name,
+                        "line": lineno,
+                    })
                     continue
                 for e in frag.get("experiences", []):
                     if e.get("source") != "memory":
@@ -144,7 +227,7 @@ class SalienceTracker:
                             # archive). Skipped: no text fallback, no credit.
                             continue
                     if r is not None:
-                        if self.note_recall(r["id"], r["tick"], frag.get("tick", 0)):
+                        if self.note_recall(r["id"], r["tick"], tick):
                             n += 1
         return n
 

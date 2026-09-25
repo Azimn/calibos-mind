@@ -48,10 +48,28 @@ class InboxCognition:
         # clock() -> (store tick, workspace sequence), sampled at queue time.
         # Wired by the CLI once the subject exists; absent in bare use.
         self._clock = clock
+        # _view_id_resolver() -> tuple[str, ...] | None: Bug C-style fallback
+        # provenance channel for views that do not carry their own ids
+        # (foreign views; CalibosWorkspace views travel with record_ids).
+        # Wired by the CLI after the subject exists; absent in bare use.
+        # Named track_view_ids, not track_ids: the dream battery's
+        # regression genome pins exactly one `def track_ids` in this module.
+        self._view_id_resolver = None
 
     def track_queue_time(self, clock):
         """clock() -> (store tick, workspace sequence); sampled per queue."""
         self._clock = clock
+
+    def track_view_ids(self, id_resolver):
+        """Wire the Bug C-style view id resolver after construction.
+
+        Needed because the CLI builds the provider before the subject
+        exists; the resolver defers the lookup, so wiring order is safe.
+        The resolver is only a fallback: ids traveling on the view itself
+        (CalibosWorkspace._ViewWithIds) take precedence because they are
+        bound to the view object and immune to stale side-channel reads.
+        """
+        self._view_id_resolver = id_resolver
 
     def _next_id(self) -> str:
         # Monotonic sequence persisted in the inbox dir, so IDs are never
@@ -72,15 +90,43 @@ class InboxCognition:
         view_tick = view_sequence = None
         if self._clock is not None:
             view_tick, view_sequence = self._clock()
+        # Queue-time record provenance for the --silent join: `mind answer
+        # --silent` must penalize the exact records the thinker saw but let
+        # pass, even when view substitution re-rendered their text (felt !=
+        # true), so the unengaged-salience penalty lands on the right
+        # records. Stamped positionally; the ids never enter the rendered
+        # prompt text the thinker sees.
+        #
+        # Provenance is part of the queue-time bundle: a provider with no
+        # wired clock is bare/legacy use and queues the legacy shape (no
+        # record_id), mirroring the dream path's "unwired resolver ->
+        # legacy fragments". queue_external prompts are externally authored
+        # (no view, no records) and never carry ids either.
+        ids = None
+        if self._clock is not None or self._view_id_resolver is not None:
+            view_ids = getattr(view, "record_ids", None)
+            if view_ids is not None:
+                # Bound to the view object itself: correct by construction.
+                # Length mismatch -> omit entirely (fail closed); never
+                # cascade to the resolver for a corrupt view.
+                if len(view_ids) == len(view.experiences):
+                    ids = view_ids
+            elif self._view_id_resolver is not None:
+                rids = self._view_id_resolver()
+                if rids is not None and len(rids) == len(view.experiences):
+                    ids = rids
+        experiences = []
+        for i, e in enumerate(view.experiences):
+            d = {"source": e.source, "first_person": e.first_person}
+            if ids is not None:
+                d["record_id"] = ids[i]
+            experiences.append(d)
         payload = {
             "id": pid,
             "prompt": prompt,
             "view_tick": view_tick,
             "view_sequence": view_sequence,
-            "experiences": [
-                {"source": e.source, "first_person": e.first_person}
-                for e in view.experiences
-            ],
+            "experiences": experiences,
         }
         (self.inbox / f"{pid}.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -106,6 +152,12 @@ class InboxCognition:
             "prompt": prompt_text,
             "view_tick": view_tick,
             "view_sequence": view_sequence,
+            # Author attribution for the subjective-transduction boundary:
+            # this prompt was authored outside a cognition view. `mind
+            # answer` stamps the answering thought "answered-external:"
+            # from this flag, so external assertions stay attributed
+            # external through every later transformation.
+            "external": True,
             "experiences": [
                 {"source": source,
                  "first_person": first_person if first_person is not None

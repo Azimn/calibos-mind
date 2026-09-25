@@ -11,6 +11,11 @@ mind.db-*
 inbox/
 dreams/
 salience.json
+# Interoceptive gap (2026-09-25): felt body state. The felt floats are
+# private phenomenology, not architecture — local-only like salience.json.
+# (The update rule and vocabulary live in calibos_mind/interoception.py,
+# which IS tracked; only the per-run felt values stay private.)
+interoception.json
 # Consolidation sidecars: proposal journal, archive, availability — all
 # local-only. The archive holds the restorable history; the journal is the
 # waker's review queue. Neither is part of the backed-up architecture.

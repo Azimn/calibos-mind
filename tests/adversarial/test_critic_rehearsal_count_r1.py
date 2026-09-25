@@ -112,10 +112,14 @@ def test_critic_note_recall_returns_genuine_bool(tmp_path):
 
 # -- contract: degraded input ---------------------------------------------------
 
-def test_critic_missing_tick_field_collapses_to_zero_pair(tmp_path):
-    """A fragment with no 'tick' field defaults to 0; two such fragments for
-    the same record are NOT a distinct pair, so they count once (measured
-    behavior locked in)."""
+def test_critic_missing_tick_field_fails_closed_pair(tmp_path):
+    """SUPERSEDED PREMISE (temporal fail-closed spec, 2026-09-25): this test
+    previously locked in the old measured behavior (a fragment with no
+    'tick' field defaulted to 0, two such fragments counting once). The
+    fail-closed spec deliberately redefines it: missing temporal provenance
+    is malformed, never an error-sentinel 0. Two tick-less fragments now
+    count zero, mutate nothing, and leave two explicit 'missing_tick'
+    diagnostics."""
     dream_dir = tmp_path / "dreams"
     dream_dir.mkdir()
     _write_log(dream_dir, "m.jsonl", [
@@ -123,8 +127,10 @@ def test_critic_missing_tick_field_collapses_to_zero_pair(tmp_path):
         {"experiences": [_mem(TEXT_A)]},
     ])
     t = _tracker(tmp_path)
-    assert t.rehearse_from_dreams(dream_dir, _records()) == 1
-    assert t.data["records"]["r1"]["recalls"] == [0]
+    assert t.rehearse_from_dreams(dream_dir, _records()) == 0
+    assert t.data["records"] == {}, t.data["records"]
+    assert [d["reason"] for d in t.diagnostics] == [
+        "missing_tick", "missing_tick"]
 
 
 def test_critic_malformed_lines_and_non_memory_sources_skipped(tmp_path):

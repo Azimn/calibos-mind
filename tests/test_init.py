@@ -36,26 +36,28 @@ def _patched_cli(tmp: Path):
     """
     db = tmp / "mind.db"
     salience = tmp / "salience.json"
+    interoception = tmp / "interoception.json"
     inbox = tmp / "inbox"
     proposals = tmp / "proposals"
     archive = tmp / "archive"
-    saved = (cli.DB, cli.SALIENCE, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
-    cli.DB, cli.SALIENCE, cli.PROPOSALS, cli.ARCHIVE = (
-        db, salience, proposals, archive)
+    saved = (cli.DB, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
+    cli.DB, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS, cli.ARCHIVE = (
+        db, salience, interoception, proposals, archive)
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
         if provider is None:
             provider = InboxCognition(inbox)
         return CalibosSubject(str(db), cartridge, cognition=provider,
-                              salience_path=str(salience))
+                              salience_path=str(salience),
+                              interoception_path=str(interoception))
 
     cli._subject = make_subject
     return make_subject, saved
 
 
 def _restore(saved):
-    cli.DB, cli.SALIENCE, cli.PROPOSALS, cli.ARCHIVE, cli._subject = saved
+    cli.DB, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS, cli.ARCHIVE, cli._subject = saved
 
 
 def _args(force):
@@ -121,10 +123,12 @@ def test_fixture_redirects_all_sidecar_paths():
     routine test run. Every path cmd_init touches must point at tmp."""
     tmp = Path(tempfile.mkdtemp(prefix="init-paths-"))
     live_proposals, live_archive = cli.PROPOSALS, cli.ARCHIVE
+    live_interoception = cli.INTEROCEPTION
     make_subject, saved = _patched_cli(tmp)
     try:
         for name, live in (("PROPOSALS", live_proposals),
-                           ("ARCHIVE", live_archive)):
+                           ("ARCHIVE", live_archive),
+                           ("INTEROCEPTION", live_interoception)):
             cur = getattr(cli, name)
             assert cur != live and str(cur).startswith(str(tmp)), \
                 f"cli.{name} not redirected: {cur}"
@@ -140,6 +144,8 @@ def test_fixture_redirects_all_sidecar_paths():
         _restore(saved)
     assert cli.PROPOSALS == live_proposals and cli.ARCHIVE == live_archive, \
         "fixture leaked redirected paths into the live CLI"
+    assert cli.INTEROCEPTION == live_interoception, \
+        "fixture leaked redirected interoception path into the live CLI"
 
 
 def _main():
