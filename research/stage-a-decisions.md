@@ -78,10 +78,15 @@ written only after all pre-freeze gates clear.
   reinterpreted as tick 0 (tick 0 is legitimate engine time, not an error
   sentinel). Counts toward Stage A readiness for the dream-rehearsal pathway.
 
-## Pre-freeze gates still open (2026-09-25; updated post-cf652b4)
+## Pre-freeze gates still open (2026-09-25; updated post-release-commitment)
 
-1. Categorical commitment-state semantics (engine stores "broken" where CLI
-   prints "released" — confirmed against the tree).
+1. ~~Categorical commitment-state semantics~~ — SHIPPED 2026-09-25: the
+   engine stored "broken" where the CLI printed "released". Now
+   `CalibosSubject.release_commitment()` writes the first-class "released"
+   state (outcome, resolved_tick, honest "deliberately released" insight
+   at the engine's weight); the engine's "broken" is reserved for genuine
+   breakage (promise_broken / resolve_commitment(kept=False)).
+   `mind resolve --released` routes through it. Tests: tests/test_release.py.
 2. Quiescent snapshot procedure.
 3. RNG and wall-clock audit. Adversarial scope now includes
    interoceptive tick discipline (relay 2026-09-25, verified against

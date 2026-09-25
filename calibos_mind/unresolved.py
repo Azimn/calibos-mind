@@ -9,10 +9,11 @@ ENGINE-OPENNESS FINDING (read 2026-09-24 from the frozen engine install;
 round-2 correction: the round-1 docstring wrongly claimed concerns have no
 open/closed distinction — they do):
 - Commitments (digital_subject/continuity.py): `status` field; open =
-  {"open", "overdue"}; closed = {"kept", "broken"}. `resolve_commitment()`
-  writes "kept"/"broken". The engine has NO "released" status:
-  calibos-mind's `mind resolve --released` passes kept=False, so the engine
-  stores "broken" (the CLI only prints it as "released").
+  {"open", "overdue"}; closed = {"kept", "broken", "released"}.
+  `release_commitment()` writes the first-class "released" state; the
+  engine's resolve_commitment() writes "kept"/"broken" only (genuine
+  breakage keeps the engine's "broken"). "released" is never
+  reconstructed later from "broken" — the category is stored.
 - Expectations (digital_subject/continuity.py): `status` field; open =
   {"pending", "expired"}; closed = {"confirmed", "violated"} — the same
   split `EndogenousSubject._open_records` uses

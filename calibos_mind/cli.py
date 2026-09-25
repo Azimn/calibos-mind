@@ -331,12 +331,21 @@ def cmd_resolve(args):
         return 1
     kept = not args.released
     with subject._transaction():
-        subject.continuity.resolve_commitment(
-            c.id,
-            outcome=args.note or ("finished" if kept else "deliberately released"),
-            kept=kept,
-            tick=subject.engine.state.tick,
-        )
+        if kept:
+            subject.continuity.resolve_commitment(
+                c.id,
+                outcome=args.note or "finished",
+                kept=True,
+                tick=subject.engine.state.tick,
+            )
+        else:
+            # First-class release: never stored as "broken" (see
+            # CalibosSubject.release_commitment).
+            subject.release_commitment(
+                c.id,
+                outcome=args.note or "deliberately released",
+                tick=subject.engine.state.tick,
+            )
     print(f"resolved {c.id[:8]} as {'kept' if kept else 'released'}: {c.description[:80]}")
     return 0
 

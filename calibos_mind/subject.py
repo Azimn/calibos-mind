@@ -205,3 +205,40 @@ class CalibosSubject(EndogenousSubject):
             self.trigger = {"kind": trigger_kind, "parents": [], "depth": 1}
             self._hear(item)
             return item.id
+
+    def release_commitment(self, commitment_id: str, *, outcome: str, tick: int):
+        """Close a commitment as deliberately released — a first-class state.
+
+        The frozen engine's Continuity.resolve_commitment(kept=False) stores
+        "broken" and writes a "did not follow through" insight. That is the
+        correct semantics for a promise_broken event (a genuine breakage),
+        but a deliberate release is psychologically different: let go on
+        purpose, not failed. Releasing is not breaking, and the store must
+        not conflate them — so this shadows the engine's resolve with the
+        "released" category and honest prose, replicating its bookkeeping
+        (outcome, resolved_tick, a commitment_result insight at the same
+        weight the engine's resolve uses, 0.45 + importance*0.45). The
+        caller owns the transaction. Pre-freeze gate 1 (categorical
+        commitment-state semantics, Stage A): "released" is now stored,
+        never reconstructed later from "broken".
+        """
+        item = self.continuity.state.commitments[commitment_id]
+        if item.status not in {"open", "overdue"}:
+            raise ValueError(
+                f"commitment {commitment_id[:8]} is already {item.status}")
+        item.status = "released"
+        item.outcome = str(outcome)
+        item.resolved_tick = int(tick)
+        # _add_insight is the engine's only writer of ReflectionInsight
+        # (it applies the retention limit); called from the calibos-mind
+        # layer with the same weight formula the engine's resolve_commitment
+        # uses. _add_insight clamps the confidence itself.
+        self.continuity._add_insight(
+            "commitment_result",
+            f"{item.actor} deliberately released: {item.description}",
+            0.45 + item.importance * 0.45,
+            item.evidence_ids,
+            int(tick),
+            "commitment_resolution",
+        )
+        return item

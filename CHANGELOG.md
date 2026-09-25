@@ -11,6 +11,47 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-09-25 — first-class "released" commitment semantics (pre-freeze gate 1 closed)
+
+### What
+- `calibos_mind/subject.py`: new `CalibosSubject.release_commitment(commitment_id, *, outcome, tick)` —
+  stores the categorical state "released" (never the engine's "broken") for
+  deliberate releases, replicating the engine's resolve bookkeeping
+  (outcome, resolved_tick, a commitment_result insight at the engine's
+  weight 0.45 + importance*0.45) with honest prose ("deliberately
+  released", not "did not follow through"). Refuses non-open commitments.
+- `calibos_mind/cli.py`: `cmd_resolve --released` routes through
+  `release_commitment`; the kept path still calls the engine's
+  `resolve_commitment(kept=True)` unchanged.
+- `calibos_mind/unresolved.py`: docstring corrected — the Zeigarnik helper
+  already keys on the open set, so "released" was automatically closed;
+  the stale "engine has NO 'released' status" note is retired.
+- `tests/test_release.py` (7 tests): release stores "released" + outcome +
+  resolved_tick; insight prose says "deliberately released" at the engine's
+  weight; engine breakage path (resolve_commitment(kept=False)) still
+  stores "broken"; kept path unchanged; release on a closed commitment
+  raises; "released" drops out of the Zeigarnik open set; CLI end-to-end
+  via monkeypatched `_subject`.
+- `research/stage-a-decisions.md`: gate 1 (categorical commitment-state
+  semantics) marked closed; gates 2 (quiescent snapshot) and 3 (RNG /
+  wall-clock audit) remain open.
+
+### Why
+Releasing is not breaking. The engine snapshot is frozen, so its
+`resolve_commitment(kept=False)` will always store "broken" — the correct
+semantics for a promise_broken event, the wrong one for a deliberate
+release, compounded by a "did not follow through" insight that would read
+as a broken promise to the thinker. Per the standing rule, psychologically
+distinct states are first-class, never reconstructed later from lossy
+booleans. Genuine breakage keeps the engine's "broken"; the fork
+experiment's commitment endpoint can now tell the two apart from stored
+state alone.
+
+### Verified
+Full suite green: 327 passed; the single exclusion is the pre-existing,
+documented `test_critic3_supersede_veto_contraction_negation` (consolidation
+round-3 open item, fails on unmodified code too).
+
 ## 2026-09-25 — relay corrections: noise-floor wording, Stage A decisions upkeep
 
 ### What
