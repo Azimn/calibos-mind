@@ -55,8 +55,9 @@ written only after all pre-freeze gates clear.
      → stronger evidence of intention-like historical propagation.
   4. Experience changes conduct under a later matched situation
      → strongest behavioral form of the Stage A result.
-- **Research question (one sentence):** Do two otherwise identical instances,
-  exposed to different experiences, become measurably different later?
+- **Research question (one sentence):** Do two otherwise causally identical
+  instances, exposed to different experiences, become measurably different
+  later?
 - **Independent variable:** lived experience. **Held fixed:** memory, salience,
   retrieval, continuity substrate. **Dependent variable:** downstream
   persistent organism state. Stage A does NOT manipulate salience.
