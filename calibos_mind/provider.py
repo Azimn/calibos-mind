@@ -17,10 +17,41 @@ from pathlib import Path
 from jelly_psiduck.cognition import cognitive_prompt
 
 
+class StalePromptError(ValueError):
+    """A queued prompt whose view has been superseded. Never answer it."""
+
+
+def check_prompt_fresh(payload: dict, sequence: int) -> None:
+    """Refuse a prompt queued from a view the store has moved past.
+
+    Raises StalePromptError when records were added after the prompt was
+    queued (the workspace sequence moved past its queue-time value), or
+    when the prompt predates queue-time provenance and its view cannot be
+    verified. Answering from a stale view would let drift accounting move
+    on thoughts the thinker never actually saw.
+    """
+    queued = payload.get("view_sequence")
+    if queued is None:
+        raise StalePromptError("prompt predates queue-time provenance; "
+                               "its view cannot be verified")
+    if sequence != queued:
+        raise StalePromptError(
+            f"view superseded: queued at tick {payload.get('view_tick')} "
+            f"(sequence {queued}), store is now at sequence {sequence}"
+        )
+
+
 class InboxCognition:
-    def __init__(self, inbox_dir: str | Path):
+    def __init__(self, inbox_dir: str | Path, clock=None):
         self.inbox = Path(inbox_dir)
         self.inbox.mkdir(parents=True, exist_ok=True)
+        # clock() -> (store tick, workspace sequence), sampled at queue time.
+        # Wired by the CLI once the subject exists; absent in bare use.
+        self._clock = clock
+
+    def track_queue_time(self, clock):
+        """clock() -> (store tick, workspace sequence); sampled per queue."""
+        self._clock = clock
 
     def _next_id(self) -> str:
         # Monotonic sequence persisted in the inbox dir, so IDs are never
@@ -38,9 +69,14 @@ class InboxCognition:
     def think(self, view):
         pid = self._next_id()
         prompt = cognitive_prompt(view)
+        view_tick = view_sequence = None
+        if self._clock is not None:
+            view_tick, view_sequence = self._clock()
         payload = {
             "id": pid,
             "prompt": prompt,
+            "view_tick": view_tick,
+            "view_sequence": view_sequence,
             "experiences": [
                 {"source": e.source, "first_person": e.first_person}
                 for e in view.experiences
@@ -49,6 +85,36 @@ class InboxCognition:
         (self.inbox / f"{pid}.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
         return None
+
+    def queue_external(self, prompt_text, source="invitation", first_person=None):
+        """Queue an externally-authored prompt (invitation, relay message...).
+
+        Unlike think(), the prompt text is authored outside a cognition
+        view, so there is no cognitive_prompt() rendering. Queue-time
+        provenance is stamped identically from the wired clock, so
+        `mind answer` can verify the store has not moved past queue time.
+        Without a wired clock the payload carries no provenance and
+        answering it is refused (fail closed), same as a legacy prompt.
+        Returns the prompt id.
+        """
+        pid = self._next_id()
+        view_tick = view_sequence = None
+        if self._clock is not None:
+            view_tick, view_sequence = self._clock()
+        payload = {
+            "id": pid,
+            "prompt": prompt_text,
+            "view_tick": view_tick,
+            "view_sequence": view_sequence,
+            "experiences": [
+                {"source": source,
+                 "first_person": first_person if first_person is not None
+                 else prompt_text}
+            ],
+        }
+        (self.inbox / f"{pid}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        return pid
 
     def pending(self) -> list[dict]:
         out = []

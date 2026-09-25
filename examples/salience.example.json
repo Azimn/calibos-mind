@@ -1,0 +1,1 @@
+{"_note":"SYNTHETIC EXAMPLE — not anyone's real salience state. Written from the schema in research/sidecar-schemas.md.","_synthetic_example":true,"records":{"experience-101":{"created":4000,"importance":0.8,"recalls":[4100,4200],"unengaged":1},"experience-102":{"created":4050,"importance":0.0,"recalls":[],"unengaged":3}}}

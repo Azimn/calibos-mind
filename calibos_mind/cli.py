@@ -10,11 +10,18 @@ indefinitely. Quick reference:
     mind answer <id> "thought"         think the thought (through the inner ear)
     mind answer <id> --silent          let that one pass
     mind think "thought"               think voluntarily, no prompt needed
-    mind dream [--ticks N]             sleep: ticks with no outside world; fragments logged, not thought
+    mind dream [--ticks N]             sleep: dream ticks, no outside world; body/tick/conduct frozen, fragments logged not thought
     mind recall [n]                    review recent dream fragments
     mind resolve <id> [--released]     close a commitment (done, or released)
     mind status                        tick, needs, open loops, inbox depth
     mind review [n]                    recent private thoughts
+    mind drift [--window N]            persona-drift signals (grown/authored salience, trigger KL)
+    mind consolidate [--list]          dry-run consolidation scan (read-only); dedup/supersede/flag proposals to journal
+    mind consolidate --accept <id>...  accept proposal(s): archive losers with written reasons
+    mind consolidate --reject <id> --reason "..."
+                                       reject a proposal (reason kept)
+    mind consolidate --quarantine <record-id> --reason "..."
+                                       archive one record immediately (audit-trailed)
 """
 from __future__ import annotations
 
@@ -32,6 +39,8 @@ DB = BASE / "mind.db"
 INBOX = BASE / "inbox"
 DREAMS = BASE / "dreams"
 SALIENCE = BASE / "salience.json"
+ARCHIVE = BASE / "archive"
+PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
 
 SEED_MEMORIES = [
@@ -56,7 +65,18 @@ def _subject(provider=None):
     cartridge = load_cartridge(CARTRIDGE_PATH)
     if provider is None:
         provider = InboxCognition(INBOX)
-    return CalibosSubject(DB, cartridge, cognition=provider, salience_path=SALIENCE)
+    subject = CalibosSubject(DB, cartridge, cognition=provider,
+                             salience_path=SALIENCE)
+    if isinstance(provider, InboxCognition):
+        # Stamp queued prompts with the store tick and record sequence at
+        # queue time, so `mind answer` can refuse superseded views.
+        provider.track_queue_time(
+            lambda: (subject.engine.state.tick, subject.workspace.sequence))
+    # Archived records stay in history but leave cognition views; the
+    # journal starts empty so this changes nothing until something is
+    # accepted or quarantined.
+    subject.workspace.availability_path = ARCHIVE / "availability.json"
+    return subject
 
 
 def _tracker(subject):
@@ -68,6 +88,8 @@ def _record_map(subject):
 
 
 def cmd_init(args):
+    import shutil
+
     if DB.exists() and not args.force:
         print(f"store already exists at {DB} (use --force to reseed)")
         return 1
@@ -77,24 +99,21 @@ def cmd_init(args):
     with subject._transaction():
         for text, concept_pair in SEED_MEMORIES:
             subject._add("memory", text, concepts=concept_pair, generated_by="cartridge")
-    # Record ids restart at experience-1 on reseed; the sidecar must restart too.
+    # Record ids restart at experience-1 on reseed; the sidecars must restart too.
+    # Stale proposal ids, archive reasons, and availability exclusions must
+    # never attach to recycled ids (same bug class as the salience reset).
     from .salience import SalienceTracker
     SalienceTracker(SALIENCE).reset()
-    print(f"initialized {DB}")
-    print("identity + preference roots seeded and pinned.")
-    return 0
-
-
-def cmd_init(args):
-    if DB.exists() and not args.force:
-        print(f"store already exists at {DB} (use --force to reseed)")
-        return 1
-    if args.force and DB.exists():
-        DB.unlink()
-    subject = _subject()
-    with subject._transaction():
-        for text, concept_pair in SEED_MEMORIES:
-            subject._add("memory", text, concepts=concept_pair, generated_by="cartridge")
+    if PROPOSALS.exists():
+        for child in PROPOSALS.iterdir():
+            if child.is_file():
+                child.unlink()
+    if ARCHIVE.exists():
+        for child in ARCHIVE.iterdir():
+            if child.is_file():
+                child.unlink()
+            elif child.is_dir():
+                shutil.rmtree(child)
     print(f"initialized {DB}")
     print("identity + preference roots seeded and pinned.")
     return 0
@@ -156,13 +175,45 @@ def cmd_inbox(args):
     return 0
 
 
-def cmd_answer(args):
+def cmd_queue(args):
     from .provider import InboxCognition
+    provider = InboxCognition(INBOX)
+    # Wire the queue-time clock through the subject so the prompt carries
+    # verifiable provenance; hand-written prompt JSON can never have it.
+    _subject(provider=provider)
+    pid = provider.queue_external(args.prompt, source=args.source,
+                                  first_person=args.experience)
+    print(f"{pid}: queued ({args.source}).")
+    return 0
+
+
+def cmd_answer(args):
+    from .provider import InboxCognition, StalePromptError, check_prompt_fresh
+    from .subject import validate_thought_text
+    if not args.silent:
+        # Validate the thought before consuming the prompt: a malformed
+        # thought must not eat the prompt it was meant to answer.
+        if not args.text:
+            print("give the thought as text, or use --silent.")
+            return 1
+        try:
+            validate_thought_text(args.text)
+        except ValueError as exc:
+            print(f"{args.id}: refused — {exc}; prompt kept.")
+            return 1
     provider = InboxCognition(INBOX)
     payload = provider.consume(args.id)
     subject = _subject()
     tracker = _tracker(subject)
     now = subject.engine.state.tick
+    try:
+        check_prompt_fresh(payload, subject.workspace.sequence)
+    except StalePromptError as exc:
+        # The prompt is already consumed (deleted); it cannot be answered
+        # or let pass from a view the store has moved past. If the matter
+        # recurs, the engine will queue a fresh prompt.
+        print(f"{args.id}: refused — {exc}; prompt discarded.")
+        return 1
     records = _record_map(subject)
     by_text = {(r["source"], r["first_person"]): r for r in records.values()}
     if args.silent:
@@ -175,12 +226,19 @@ def cmd_answer(args):
         tracker.save()
         print(f"{args.id}: let pass (silence).")
         return 0
-    if not args.text:
-        print("give the thought as text, or use --silent.")
+    tid = None
+    try:
+        tid = subject.inject_thought(
+            args.text, trigger_kind="answered",
+            generated_by=f"answered:{args.id}@{now}")
+    except ValueError as exc:
+        # The prompt is already consumed; refuse cleanly instead of a traceback.
+        print(f"{args.id}: refused — {exc}; nothing recorded.")
         return 1
-    tid = subject.inject_thought(args.text, trigger_kind="answered")
-    # Answering is engagement: the thought mattered.
-    r = records.get(tid)
+    assert tid is not None
+    # Answering is engagement: the thought mattered. Refresh the record map
+    # after injection (it was captured before), mirroring cmd_think.
+    r = _record_map(subject).get(tid)
     if r is not None:
         tracker.add_importance(tid, r["tick"], 0.5)
     tracker.save()
@@ -197,7 +255,12 @@ def cmd_answer(args):
 
 def cmd_think(args):
     subject = _subject()
-    tid = subject.inject_thought(args.text, trigger_kind="voluntary")
+    try:
+        tid = subject.inject_thought(args.text, trigger_kind="voluntary",
+                                     generated_by="voluntary")
+    except ValueError as exc:
+        print(f"refused — {exc}; nothing recorded.")
+        return 1
     # A voluntary thought is revealed preference: it mattered.
     r = _record_map(subject).get(tid)
     if r is not None:
@@ -262,17 +325,31 @@ def cmd_status(args):
     print("recent:", " | ".join(f"t{t['tick']}:{t['action']}" for t in beats))
     logs = _dream_logs()
     if logs:
-        n = sum(1 for line in logs[-1].read_text(encoding="utf-8").splitlines()
-                if line.strip())
-        print(f"dreams: {n} fragments in {logs[-1].stem} (mind recall)")
+        def _frag_count(p):
+            return sum(1 for line in p.read_text(encoding="utf-8").splitlines()
+                       if line.strip())
+        n = _frag_count(logs[-1])
+        if n:
+            print(f"dreams: {n} fragments in {logs[-1].stem} (mind recall)")
+        else:
+            prev = next((p for p in reversed(logs[:-1]) if _frag_count(p)), None)
+            if prev is None:
+                print(f"dreams: 0 fragments in {logs[-1].stem} (mind recall)")
+            else:
+                print(f"dreams: 0 fragments in {logs[-1].stem}; "
+                      f"latest with fragments: {_frag_count(prev)} in {prev.stem} "
+                      f"(mind recall)")
     tracker = _tracker(subject)
     recs = [r for r in state["workspace"]["records"]
             if r.get("generated_by") != "cartridge" and r["available_to_cognition"]]
     if recs and tracker is not None:
+        from .unresolved import has_unresolved_links, open_link_keys
+        open_keys = open_link_keys(state)
         now_tick = eng["tick"]
         top = max(recs, key=lambda r: tracker.activation(
             r["id"], r["tick"], now_tick,
-            unresolved=bool(r["concern_links"] or r["expectation_links"])))
+            unresolved=has_unresolved_links(
+                r["concern_links"], r["expectation_links"], open_keys)))
         print(f"most salient: [{top['source']}] {top['first_person'][:80]}")
     return 0
 
@@ -317,7 +394,9 @@ def cmd_dream(args):
     for _ in range(args.ticks):
         frag_before = len(dreamer.fragments)
         trace_before = len(subject.inspect()["trace"])
-        result = subject.heartbeat()
+        # Isolated sleep tick: body, clock, and conduct frozen; isolation
+        # assertions run around every tick and raise on violation.
+        result = subject.dream_tick()
         state = subject.inspect()
         triggers = [t["trigger"] for t in state["trace"][trace_before:]
                     if t["kind"] == "cognition_trigger"]
@@ -371,6 +450,126 @@ def cmd_recall(args):
     return 0
 
 
+def cmd_drift(args):
+    from .drift import drift_report
+    subject = _subject()
+    state = subject.inspect()
+    tracker = _tracker(subject)
+    rep = drift_report(state, tracker, window=args.window)
+    r = rep["ratio"]
+    print(f"drift (tick {rep['tick']}, {rep['n_records']} records) — read-only")
+    if r["R"] is None:
+        print("grown/authored salience ratio R: undefined — all records tie at equal salience")
+    else:
+        print(f"grown/authored salience ratio R = {r['R']:.3f}")
+    print(f"  grown:    {r['n_grown']:>3} records, salience {r['grown_salience']:.3f}")
+    print(f"  authored: {r['n_authored']:>3} records, salience {r['authored_salience']:.3f} "
+          f"(cartridge: identity root + seeds)")
+    if r["top_grown"]:
+        print("  top grown:    " + ", ".join(f"{rid} ({w:.2f})" for w, rid in r["top_grown"]))
+    if r["top_authored"]:
+        print("  top authored: " + ", ".join(f"{rid} ({w:.2f})" for w, rid in r["top_authored"]))
+    kl = rep["trigger_kl"]
+    if kl["ok"]:
+        print(f"trigger KL (recent {kl['n_recent']} vs prior {kl['n_baseline']}): "
+              f"{kl['kl']:.4f} nats")
+        print(f"  recent:   {kl['recent_hist']}")
+        print(f"  baseline: {kl['baseline_hist']}")
+    else:
+        print(f"trigger KL: not scored — {kl['reason']}")
+    return 0
+
+
+def _proposal_line(p):
+    head = (f"#{p['id']} [{p['kind']}] {p['a']} / {p['b']} "
+            f"(confidence {p['confidence']:.3f}, proposed @ tick {p['created_tick']})")
+    return f"{head}\n    {p['rationale']}"
+
+
+def cmd_consolidate(args):
+    from . import consolidate as C
+    picked = [args.list, bool(args.accept), bool(args.reject), bool(args.quarantine)]
+    if sum(picked) > 1:
+        print("consolidate: pick one action per run "
+              "(--list, --accept, --reject, --quarantine)")
+        return 1
+    try:
+        if args.list:
+            pend = C.pending_proposals(C.load_journal(PROPOSALS))
+            if not pend:
+                print("no pending proposals.")
+                return 0
+            for p in sorted(pend, key=lambda p: p["id"]):
+                print(_proposal_line(p))
+            return 0
+        if args.accept:
+            outcomes = C.accept(DB, PROPOSALS, ARCHIVE, args.accept)
+            failed = 0
+            for o in outcomes:
+                if o["ok"]:
+                    if o["kind"] == "contradiction-flag":
+                        print(f"accepted #{o['id']} [contradiction-flag]: "
+                              f"reviewed, nothing archived (zero-mutation flag).")
+                    else:
+                        print(f"accepted #{o['id']} [{o['kind']}]: archived "
+                              f"{o['loser']} with written reason.")
+                else:
+                    failed += 1
+                    print(f"proposal {o['id']} NOT applied: {o['error']} "
+                          f"(left pending — never burned on failure).")
+            return 1 if failed else 0
+        if args.reject:
+            try:
+                pid = int(args.reject)
+            except (TypeError, ValueError):
+                print(f"consolidate: not a proposal id: {args.reject!r}")
+                return 1
+            # Reject touches only the proposal journal — never require the
+            # store. Best-effort tick (0 default) so a missing or corrupt
+            # store can't wedge the safe disposition.
+            try:
+                _, tick = C.load_records(DB)
+            except C.ConsolidationError:
+                tick = 0
+            C.reject(PROPOSALS, pid, args.reason, store_tick=tick)
+            print(f"rejected #{pid} (reason kept).")
+            return 0
+        if args.quarantine:
+            res = C.quarantine(DB, ARCHIVE, args.quarantine, args.reason)
+            print(f"quarantined {res['record_id']} @ tick {res['archived_tick']}: "
+                  f"{res['reason']}")
+            return 0
+        # Default: dry-run scan. The only write on this path is the proposal
+        # journal append; mind.db is opened read-only (mode=ro), so a write
+        # to it is impossible, not merely avoided.
+        report = C.dry_run(DB, PROPOSALS, ARCHIVE)
+        s = report["stats"]
+        capped = " (CAPPED — some pairs unevaluated)" if s["capped"] else ""
+        print(f"consolidation dry-run @ tick {report['store_tick']}: "
+              f"{s['records']} records, {s['candidates']} candidates, "
+              f"{s['pairs']} pairwise comparisons{capped}")
+        print(f"  exact {s['exact']} · near-dup {s['near']} · "
+              f"supersede {s['supersede']} · flags {s['flags']}")
+        if not report["proposals"]:
+            pend = len(C.pending_proposals(C.load_journal(PROPOSALS)))
+            if pend:
+                print(f"no proposals this scan — {pend} pending proposal"
+                      f"{'s' if pend != 1 else ''} still await review.")
+            else:
+                print("no proposals — nothing met the consolidation thresholds.")
+        else:
+            for p in report["proposals"]:
+                print(_proposal_line(p))
+            print(f"{len(report['proposals'])} proposal(s) -> "
+                  f"{PROPOSALS}/proposals.json (status: pending)")
+        print("dry-run changed nothing else: no archive writes, no availability "
+              "changes, mind.db opened read-only.")
+        return 0
+    except C.ConsolidationError as exc:
+        print(f"consolidate: {exc}")
+        return 1
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="mind", description="Calibos' private cognitive tool")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -394,6 +593,15 @@ def main(argv=None):
     p = sub.add_parser("inbox", help="list prompts waiting for thought")
     p.set_defaults(func=cmd_inbox)
 
+    p = sub.add_parser("queue", help="queue an externally-authored prompt "
+                                   "(invitation, relay message) with queue-time provenance")
+    p.add_argument("prompt", help="the prompt text to think about later")
+    p.add_argument("--source", default="invitation",
+                   help="experience source label (default: invitation)")
+    p.add_argument("--experience", default=None, dest="experience",
+                   help="first-person experience text (default: the prompt text)")
+    p.set_defaults(func=cmd_queue)
+
     p = sub.add_parser("answer", help="answer a queued prompt")
     p.add_argument("id")
     p.add_argument("text", nargs="?", default=None)
@@ -404,7 +612,8 @@ def main(argv=None):
     p.add_argument("text")
     p.set_defaults(func=cmd_think)
 
-    p = sub.add_parser("dream", help="sleep: ticks with no outside world; fragments are logged, not thought")
+    p = sub.add_parser("dream", help="sleep: dream ticks with no outside world; "
+                                     "body, tick, and conduct frozen; fragments logged, not thought")
     p.add_argument("--ticks", type=int, default=12)
     p.set_defaults(func=cmd_dream)
 
@@ -425,6 +634,24 @@ def main(argv=None):
     p = sub.add_parser("review", help="recent private thoughts")
     p.add_argument("n", type=int, nargs="?", default=5)
     p.set_defaults(func=cmd_review)
+
+    p = sub.add_parser("drift", help="persona-drift signals: grown/authored salience ratio + trigger-histogram KL")
+    p.add_argument("--window", type=int, default=10,
+                   help="recent-trigger window size for the KL (default 10)")
+    p.set_defaults(func=cmd_drift)
+
+    p = sub.add_parser("consolidate",
+                       help="dry-run consolidation scan (read-only); proposal journal for dedup/supersede/flags")
+    p.add_argument("--list", action="store_true", help="show pending proposals")
+    p.add_argument("--accept", nargs="+", metavar="ID",
+                   help="accept proposal(s): archive losers with written reasons")
+    p.add_argument("--reject", metavar="ID",
+                   help="reject a proposal (reason kept; needs --reason)")
+    p.add_argument("--quarantine", metavar="RECORD-ID",
+                   help="archive one record immediately (needs --reason)")
+    p.add_argument("--reason", default="",
+                   help="written reason, required with --reject and --quarantine")
+    p.set_defaults(func=cmd_consolidate)
 
     args = parser.parse_args(argv)
     return args.func(args)

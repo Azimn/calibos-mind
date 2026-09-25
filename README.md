@@ -15,14 +15,23 @@ always a valid answer.
     ./mind note "something I want it to know" [--tags a,b] [--valence 0.4]
     ./mind heartbeat [--ticks N]     # let time pass; prompts queue to inbox/
     ./mind inbox                     # what is waiting for thought
+    ./mind queue "prompt" [--source S] [--experience "first-person"]
+                                     # queue an externally-authored prompt (invitation, relay
+                                     # message) with queue-time provenance; hand-written prompt
+                                     # JSON can never carry it and will be refused on answer
     ./mind answer <id> "thought"     # think it (through the inner ear)
     ./mind answer <id> --silent      # let it pass
     ./mind think "thought"           # voluntary thought, no prompt needed
-    ./mind dream [--ticks N]        # sleep: ticks with no outside world; fragments logged, not thought
+    ./mind dream [--ticks N]        # sleep: dream ticks, no outside world; body/tick/conduct frozen, fragments logged not thought
     ./mind recall [n]               # review recent dream fragments
     ./mind resolve <id> [--released] # close a commitment (done, or released)
     ./mind status                    # tick, needs, open loops, inbox depth
     ./mind review [n]                # recent private thoughts
+    ./mind drift [--window N]        # persona-drift signals (read-only)
+    ./mind consolidate [--list]      # dry-run consolidation scan (read-only); proposals to journal
+    ./mind consolidate --accept <id>...      # accept proposal(s): archive losers with written reasons
+    ./mind consolidate --reject <id> --reason "..."   # reject a proposal (reason kept)
+    ./mind consolidate --quarantine <record-id> --reason "..."  # archive one record now
 
 ## What I changed from stock
 
@@ -56,15 +65,33 @@ always a valid answer.
 
 ## Dreaming
 
-`mind dream` sleeps the mind: ticks run with no outside world — no events,
-body at rest — while the engine's associative machinery (echoes,
-prior-thought triggers, memory resurfacing, drift) keeps running offline.
-When the sleeping engine wants a thought, the view is recorded as a dream
-fragment (`dreams/`, local only) instead of queuing an inbox prompt: dreams
-propose, the waker disposes. `mind recall` reviews them, with a rehearsal
-summary of what the dream kept returning to. Zero LLM calls; the dreaming
-is done by the engine itself. A nightly dream runs ~03:21; each wake-up
-starts by remembering it.
+`mind dream` sleeps the mind: dream ticks run with no outside world and
+with the body, the clock, and conduct frozen — needs and pressures do not
+move, the store tick does not advance, no conduct is selected or performed,
+and no heartbeat/activity traces are written. A before/after isolation
+assertion runs around every dream tick (`calibos_mind/sleep.py`) and fails
+loudly if anything outside the dream's remit moved. Within that frozen
+frame the engine's associative machinery (echoes, prior-thought triggers,
+memory resurfacing, drift) keeps running offline: when the sleeping engine
+wants a thought, the view is recorded as a dream fragment (`dreams/`, local
+only) instead of queuing an inbox prompt — dreams propose, the waker
+disposes. Thoughts that resurface from echoes while asleep are stamped
+`dream-derived`. `mind recall` reviews fragments, with a rehearsal summary
+of what the dream kept returning to. Zero LLM calls; the dreaming is done
+by the engine itself. A nightly dream runs ~03:21; each wake-up starts by
+remembering it.
+
+## Thought provenance
+
+Every thought record carries an honest origin in `generated_by`:
+`cartridge` (seed/authored), `answered:<prompt-id>@<tick>` (inbox answer —
+the prompt id and the store tick at think time), `voluntary`,
+`dream-derived` (an echo resurfacing while asleep), `cognition` (the
+engine's own heartbeat, e.g. a live model provider). Queued prompts are
+stamped with the store tick and record sequence at queue time, and `mind
+answer` refuses a prompt whose view has been superseded — if records were
+added after it was queued, the prompt is discarded rather than answered
+stale, so drift accounting can never move on a view the thinker never saw.
 
 ## Salience
 
@@ -75,6 +102,27 @@ concerns — computed lazily at view time, nothing ever deleted for ranking.
 Signals: `--valence` on notes, answering vs. letting prompts pass, voluntary
 thoughts, dream rehearsal. `mind status` shows the current most-salient
 record. Sidecar `salience.json` stays local-only.
+
+## Consolidation
+
+A deterministic da7-tech/dream port (research/mechanisms-deepdive-2026-09-24.md
+§3): the store gets an audit-trailed way to retire duplicates and superseded
+statements — the mechanism for the standing seed experiment. `mind consolidate`
+dry-runs a read-only scan (`mind.db` is opened `mode=ro`, so a write is
+impossible, not merely avoided) and emits structured proposals to the
+local-only journal `proposals/proposals.json`: exact dedup (md5 of normalized
+tokens), near-dup (Jaccard ≥ 0.85 or containment ≥ 0.92 *plus* the
+`_same_sequence` guard — "A calls B" vs "B calls A" are opposites, not
+duplicates), supersession (same subject restated, newer `created_tick` wins —
+seeds lose by construction), and contradiction flags (report-only, zero
+mutation). Merge/squeeze deliberately not ported. The waker disposes:
+`--accept` archives losers (retry-safe: records re-verified against the
+proposal hash first; failures leave the proposal pending, never burned),
+`--reject` needs a reason, `--quarantine` archives one record immediately
+for synthetic residue. Archived records are marked unavailable in the
+local-only `archive/availability.json` consulted by views — history, never
+deleted — with full text + written reason in `archive/memories.jsonl`.
+`mind.db` is never written by any consolidation path.
 
 ## Backup & privacy- Git repo, branch `main`, mirrored to private GitHub `Azimn/calibos-mind`.
 - **Backed up:** code, cartridge, research, docs, `CHANGELOG.md` — the
@@ -93,7 +141,10 @@ record. Sidecar `salience.json` stays local-only.
 Full ranked report: `research/improvements-2026-09-24.md`. Sequencing:
 1. `mind resolve` — done (commitment lifecycle; engine's resolve_commitment).
 2. Salience with decay + rehearsal — substrate for most of the rest.
-3. Sleep consolidation pass (episodic → insight abstraction), CLI-assisted.
+3. Sleep consolidation pass — done 2026-09-24 (da7 port: dedup + supersession
+   with written reasons + contradiction flags; dry-run default, proposal
+   journal, archive-never-delete). Dream fragments as consolidation *input*
+   remain future work.
 4. Then: inbox TTL + concern dedupe, novelty/dissonance triggers (gate drift),
    SM-2 echoes, salience-weighted workspace + absence lines.
 Never: touch frozen research protocol/PRs; leak machinery into prompt views;

@@ -11,3 +11,8 @@ mind.db-*
 inbox/
 dreams/
 salience.json
+# Consolidation sidecars: proposal journal, archive, availability — all
+# local-only. The archive holds the restorable history; the journal is the
+# waker's review queue. Neither is part of the backed-up architecture.
+proposals/
+archive/
