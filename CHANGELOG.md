@@ -11,6 +11,36 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-09-25 — relay corrections: noise-floor wording, Stage A decisions upkeep
+
+### What
+Documentation-only corrections from the ChatGPT relay (verified against the
+tree before applying):
+- `calibos_mind/interoception.py`: the `BAND_NOISE_FLOOR` comment said the
+  floor "guarantees" an empty status on a pinned-baseline body. An AR(1)
+  with phi = 0.88 and per-step noise bounded by 0.01 has a theoretical
+  extreme displacement of 0.01/(1-0.88) ≈ 0.0833 under a sufficiently long
+  same-sign noise run — above the 0.05 floor — so "guarantees" overstated
+  the claim. Reworded to what the evidence supports: under the pinned
+  default seed and validated horizons, the floor suppresses baseline
+  jitter from status display. No behavior change.
+- `research/stage-a-decisions.md`: the pre-freeze gate list still showed
+  subjective transduction and temporal fail-closed as open; both shipped
+  in cf652b4 — marked shipped. Added the causal-identity note that
+  `interoception.json` (seed, params, per-need felt/last_tick/level) is
+  causal state for the Stage A manifest: the recurrence is
+  felt(t+1) = F(felt(t), actual(t+1), tick, seed, params), so prior felt
+  state is not derivable from seed + tick. Specified the interoceptive
+  tick-discipline adversarial test for the RNG/wall-clock audit gate:
+  exactly one tracker update per waking heartbeat (post-heartbeat), zero
+  on dream ticks; duplicate/skipped/out-of-order calls characterized.
+
+### Why
+The decisions log is provenance for the experiment — if it goes stale it
+misleads the protocol author. And a comment that claims more than the
+implementation supports is a small lie the critic would eventually catch;
+better to fix it when the relay spots it.
+
 ## 2026-09-25 — temporal fail-closed rehearsal semantics
 
 ### What

@@ -77,12 +77,33 @@ written only after all pre-freeze gates clear.
   reinterpreted as tick 0 (tick 0 is legitimate engine time, not an error
   sentinel). Counts toward Stage A readiness for the dream-rehearsal pathway.
 
-## Pre-freeze gates still open (2026-09-25)
+## Pre-freeze gates still open (2026-09-25; updated post-cf652b4)
 
 1. Categorical commitment-state semantics (engine stores "broken" where CLI
    prints "released" — confirmed against the tree).
 2. Quiescent snapshot procedure.
-3. RNG and wall-clock audit.
-4. Subjective-transduction mutation (in builder/critic loop as of 2026-09-25).
-5. Temporal fail-closed hardening (queued; runs after the transduction
-   mutation lands to avoid two coordinators editing the rehearsal path).
+3. RNG and wall-clock audit. Adversarial scope now includes
+   interoceptive tick discipline (relay 2026-09-25, verified against
+   the tree): exactly one `InteroceptionTracker.update()` per waking
+   heartbeat, applied after that heartbeat, zero updates on dream ticks.
+   `update()` stores `last_tick` but enforces nothing, and duplicate
+   calls are not idempotent (the lag step re-applies; only the noise is
+   per-tick deterministic). The audit must exercise duplicate, skipped,
+   and out-of-order tick calls against the tracker and characterize the
+   behavior — the harness invariant is what makes them impossible in
+   production, but "deterministic from seed + tick" is misleading without
+   it, because the recurrence is
+   felt(t+1) = F(felt(t), actual(t+1), tick, seed, params):
+   the update-count history matters, not just seed and tick.
+4. ~~Subjective-transduction mutation~~ — SHIPPED 2026-09-25 (cf652b4).
+5. ~~Temporal fail-closed hardening~~ — SHIPPED 2026-09-25 (cf652b4).
+
+## Causal-identity note: interoceptive state (2026-09-25, relay)
+
+`interoception.json` — seed, params, and per-need felt/last_tick/level —
+is causal state and belongs in the Stage A manifest. Two branches with
+identical `mind.db` but different felt-body state are not causally
+identical, because the recurrence carries prior felt state forward
+(felt(t+1) depends on felt(t), not just seed + tick). The manifest must
+capture the full tracker data plus the update position relative to the
+engine tick (post-heartbeat, waking ticks only).

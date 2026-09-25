@@ -77,9 +77,11 @@ FELT_BANDS = ("settled", "stirring", "pressing", "urgent")
 # (~4.1 sigma), comfortably above the measured long-horizon maximum; the
 # same 500-tick calm run renders zero bands.
 #
-# What the floor guarantees: on a pinned-baseline body, felt_bands() is
-# empty — "all settled" means genuinely settled, not quiet-by-luck. It
-# does not bound the jitter itself (an AR(1) is unbounded in principle);
+# What the floor provides (under the pinned default seed and validated
+# horizons): on a pinned-baseline body, felt_bands() is empty — "all
+# settled" means genuinely settled, not quiet-by-luck. It does not bound
+# the jitter itself (an AR(1) is unbounded in principle — a sufficiently
+# long same-sign noise run could theoretically exceed any fixed floor);
 # it bounds the *displayed* flicker, so seeded noise never reads as a felt
 # movement in `mind status` until a departure exceeds ~4 sigma of the
 # stationary jitter.
