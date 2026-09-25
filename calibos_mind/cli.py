@@ -384,6 +384,11 @@ def cmd_dream(args):
     from .provider import DreamCognition
     dreamer = DreamCognition(DREAMS)
     subject = _subject(dreamer)
+    # Wire dream provenance: the resolver reads the workspace's transient
+    # view-build side-channel synchronously inside think(), so each fragment
+    # experience is stamped with the id of the record that surfaced it.
+    # (Deferred lookup: the subject did not exist when the provider was built.)
+    dreamer.track_ids(lambda: subject.workspace._last_view_ids)
     if subject.inspect()["pending"]:
         print("dream refused: pending external events are waking business — "
               "handle them first, then sleep.")

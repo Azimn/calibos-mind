@@ -145,14 +145,41 @@ class DreamCognition:
     echoes, and memory resurfacing running with no outside world.
     """
 
-    def __init__(self, dream_dir: str | Path):
+    def __init__(self, dream_dir: str | Path, id_resolver=None):
         self.dream_dir = Path(dream_dir)
         self.dream_dir.mkdir(parents=True, exist_ok=True)
         self.fragments: list[list[dict]] = []
+        # id_resolver() -> tuple[str, ...] | None: the record ids behind the
+        # view most recently built by the workspace, in order. The frozen
+        # engine's FeltExperience carries no id, so the view alone cannot
+        # supply provenance; the resolver reads the workspace's transient
+        # view-build side-channel instead. Wired by cmd_dream; absent in
+        # bare use, in which case fragments carry no record_id (legacy shape).
+        self._id_resolver = id_resolver
+
+    def track_ids(self, id_resolver):
+        """Wire the view-build id resolver after construction.
+
+        Needed because cmd_dream builds the provider before the subject
+        exists; the resolver defers the lookup, so wiring order is safe.
+        """
+        self._id_resolver = id_resolver
 
     def think(self, view):
-        self.fragments.append(
-            [{"source": e.source, "first_person": e.first_person}
-             for e in view.experiences]
-        )
+        # record_id is private provenance: it lets rehearsal credit the exact
+        # record that surfaced, even when two records share identical text.
+        # It is written to the fragment dict only — it never enters a
+        # cognitive view, prompt text, or recall display.
+        ids = self._id_resolver() if self._id_resolver is not None else None
+        if ids is not None and len(ids) != len(view.experiences):
+            # Stale or mismatched: omit rather than misattribute. Rehearsal
+            # falls back to text matching for id-less experiences.
+            ids = None
+        frag = []
+        for i, e in enumerate(view.experiences):
+            d = {"source": e.source, "first_person": e.first_person}
+            if ids is not None:
+                d["record_id"] = ids[i]
+            frag.append(d)
+        self.fragments.append(frag)
         return None

@@ -76,6 +76,13 @@ class CalibosWorkspace(SubjectiveWorkspace):
     # Attached by CalibosSubject when a salience sidecar path is configured.
     # Absent (plain engine use) -> falls back to recency ordering.
     salience_tracker = None
+    # Transient provenance side-channel (in-memory only, never persisted):
+    # the record ids behind the most recently built view, in order. The
+    # frozen engine's FeltExperience drops the record id, so a recorder that
+    # only sees the view cannot recover provenance without this. Set on every
+    # view() call; read synchronously by DreamCognition.think() via the
+    # resolver wired in cmd_dream. Never rendered into prompts or displays.
+    _last_view_ids: tuple = ()
     # Callable returning the set of currently-unresolved link keys (see
     # calibos_mind/unresolved.py). Attached by CalibosSubject from live engine
     # state so the Zeigarnik boost intersects links against what is actually
@@ -98,6 +105,7 @@ class CalibosWorkspace(SubjectiveWorkspace):
         rest = [r for r in eligible if r.id not in pinned_ids]
         room = VIEW_LIMIT - len(pinned)
         if room <= 0:
+            self._last_view_ids = tuple(r.id for r in pinned[:VIEW_LIMIT])
             return CognitiveView(tuple(FeltExperience(r.source, r.first_person)
                                        for r in pinned[:VIEW_LIMIT]))
 
@@ -125,6 +133,11 @@ class CalibosWorkspace(SubjectiveWorkspace):
         if tracker is None:
             admitted = admitted[::-1]
         window = pinned + admitted
+        # Provenance side-channel: capture the record ids behind this view,
+        # in order, before the FeltExperience conversion drops them. The
+        # engine hands the provider the freshly built view immediately, so a
+        # resolver reading this inside think() sees exactly this view's ids.
+        self._last_view_ids = tuple(r.id for r in window)
         return CognitiveView(tuple(FeltExperience(r.source, r.first_person)
                                    for r in window))
 

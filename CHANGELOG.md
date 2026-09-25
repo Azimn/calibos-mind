@@ -860,3 +860,82 @@ critic failure: `test_critic3_supersede_veto_contraction_negation`
 (tests/adversarial/test_critic_consolidate_r3.py) — the round-3 finding that
 contraction negations ("doesn't") escape the supersede veto regex. Open
 builder/critic business, not touched here.
+
+## 2026-09-25 — rehearsal counter over-report fix (builder/critic Bug B)
+
+### What
+`calibos_mind/salience.py`: `SalienceTracker.note_recall(rid, created_tick, tick)`
+now returns True when the tick was newly added to the record's recall set and
+False when already present (signature otherwise unchanged; the only caller
+anywhere is `rehearse_from_dreams`, verified by grep). `rehearse_from_dreams`
+increments its returned count `n` only when `note_recall` returned True.
+Docstring updated: the count is now idempotent alongside the set.
+
+### Why
+Bug B: the recall SET was idempotent but the COUNT was not — reprocessing
+identical dream logs inflated `n` per text match even when `note_recall`
+added nothing. Fitness: second-pass reprocessing of identical logs now
+returns 0; first pass counts each distinct (record, tick) pair exactly once.
+New tests: `tests/adversarial/test_builder_rehearsal_count_r1.py` (7 tests —
+second-pass zero, exact first-pass counting with same-tick duplicates,
+`note_recall` True/False contract, mixed old+new logs, plus genome checks:
+dream logs byte-identical after rehearsal, no unprompted sidecar persistence,
+exact-zero reporting). Full suite green except the one pre-existing,
+documented `test_critic3_supersede_veto_contraction_negation` failure
+(consolidation round-3 open item, unrelated to this change — fails on
+unmodified code too).
+
+## 2026-09-25 — dream rehearsal provenance by id (builder/critic Bug C)
+
+### What
+Dream fragments now carry a private `record_id` per memory experience, and
+`rehearse_from_dreams` matches by id instead of by exact
+`(source, first_person)` text. Matching rule: id present → match by id only;
+id present but naming no current record → skipped with NO text fallback
+(falling back there would credit the wrong record — the hazard being fixed);
+id absent (fragments written before this fix, or recorded without a wired
+resolver) → legacy exact-text fallback. `note_recall(...)`-returns-True
+counting (Bug B) is unchanged.
+
+### Mechanism correction (spec premise refuted against the install)
+The spec's step 1 asked to verify that view.experiences elements are
+`SubjectiveExperience` objects carrying `.id`. Against the frozen install
+they are not: the engine builds `CognitiveView` from `FeltExperience(source,
+first_person)` — a frozen dataclass with NO id field (`workspace.py:64-66`).
+Reading `e.id` in `DreamCognition.think` raised `AttributeError`, which the
+engine's dream tick swallows as a `cognition_error` trace — dreaming silently
+stopped recording fragments (caught by `tests/test_sleep.py`, fixed before
+shipping). The corrected mechanism: `CalibosWorkspace.view()` captures the
+window's record ids in a transient in-memory side-channel (`_last_view_ids`,
+set on every view() call including the pinned-only early-return path) before
+the `FeltExperience` conversion drops them; `DreamCognition.think` stamps
+each fragment experience positionally from a resolver wired by `cmd_dream`
+(`dreamer.track_ids(lambda: subject.workspace._last_view_ids)`), read
+synchronously inside `think()` when the side-channel holds exactly the view
+being handled. Length mismatch → id omitted, never misattributed. The
+side-channel is never persisted, never enters prompts, and never reaches
+`mind recall` display (`cmd_recall` still prints `[source] first_person`
+only — pinned by test). `research/sidecar-schemas.md` §1 updated: `record_id`
+documented, both pending notes retired.
+
+### Why
+Two distinct records with identical text collapsed into one rehearsal target
+under text matching. Fitness: each record's recall set now gets its own
+ticks; old id-less fragments still rehearse via fallback. New tests:
+`tests/adversarial/test_builder_dream_provenance_r1.py` (12 tests —
+independent rehearsal of identical-text records, legacy fallback, unknown-id
+skip with no fallback, mixed runs, display privacy, Bug B idempotence through
+the new path, plus genome checks: engine-truth pin that `FeltExperience`
+carries no id, positional stamping from a real `CalibosWorkspace`, unwired
+legacy shape, length-mismatch omission, no sidecar write by rehearsal,
+explicit skip reporting). Full suite: 192 passed; the single failure is the
+pre-existing, unrelated `test_critic3_supersede_veto_contraction_negation`
+(consolidation round-3 open item — fails on unmodified code too).
+
+### Notes for the critic
+- The `room <= 0` early-return branch in `CalibosWorkspace.view()` is
+  unreachable as written (`pinned` is capped at `MAX_PINNED = 6`,
+  `VIEW_LIMIT = 16`, so `room >= 10` always) — pre-existing dead branch, left
+  untouched as out of scope; the stash line there is belt-and-braces.
+- `InboxCognition.think` prompt payloads are unchanged (no `record_id`) —
+  rehearsal only consumes dream logs, so inbox prompts are out of scope.

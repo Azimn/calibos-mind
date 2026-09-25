@@ -56,10 +56,17 @@ class SalienceTracker:
             recs[rid] = e
         return e
 
-    def note_recall(self, rid: str, created_tick: int, tick: int) -> None:
+    def note_recall(self, rid: str, created_tick: int, tick: int) -> bool:
+        """Record a recall of record ``rid`` at ``tick``.
+
+        Returns True when the tick was newly added to the record's recall set,
+        False when it was already present (no change).
+        """
         e = self._entry(rid, created_tick)
         if tick not in e["recalls"]:
             e["recalls"].append(tick)
+            return True
+        return False
 
     def add_importance(self, rid: str, created_tick: int, delta: float) -> None:
         e = self._entry(rid, created_tick)
@@ -96,9 +103,19 @@ class SalienceTracker:
     def rehearse_from_dreams(self, dream_dir: str | Path, records: list[dict]) -> int:
         """Fold dream-fragment memory surfacings into recall counts.
 
+        Provenance: a memory experience carrying ``record_id`` is matched by
+        id only. An id that names no record in the current workspace is
+        skipped — falling back to text there would credit the wrong record,
+        which is exactly the hazard this fixes. Only id-less fragments
+        (written before record_id existed) fall back to exact
+        (source, first_person) text matching.
+
         Idempotent: reprocessing a log re-adds nothing (recalls are a set of
-        ticks). Only memories currently in the workspace can be rehearsed.
+        ticks), and the returned count is idempotent too — it counts each
+        distinct (record, tick) pair exactly once across reprocessings. Only
+        memories currently in the workspace can be rehearsed.
         """
+        by_id = {r["id"]: r for r in records}
         by_text = {(r["source"], r["first_person"]): r for r in records}
         n = 0
         for path in sorted(Path(dream_dir).glob("*.jsonl")):
@@ -116,10 +133,19 @@ class SalienceTracker:
                 for e in frag.get("experiences", []):
                     if e.get("source") != "memory":
                         continue
-                    r = by_text.get((e.get("source"), e.get("first_person")))
+                    rid = e.get("record_id")
+                    if rid is None:
+                        # Legacy fragment: text is all we have.
+                        r = by_text.get((e.get("source"), e.get("first_person")))
+                    else:
+                        r = by_id.get(rid)
+                        if r is None:
+                            # The record has left the workspace (reseed,
+                            # archive). Skipped: no text fallback, no credit.
+                            continue
                     if r is not None:
-                        self.note_recall(r["id"], r["tick"], frag.get("tick", 0))
-                        n += 1
+                        if self.note_recall(r["id"], r["tick"], frag.get("tick", 0)):
+                            n += 1
         return n
 
     # -- persistence ------------------------------------------------------

@@ -40,21 +40,31 @@ Each entry in `experiences` is a `FeltExperience`:
 |---|---|---|---|
 | `source` | string | yes | One of the 8 engine sources (see §5) |
 | `first_person` | string | yes | The experience text as the subject would phrase it |
+| `record_id` | string | since 2026-09-25 | Private provenance: the workspace record id that surfaced. Stamped on every fragment experience; only `memory`-sourced ones are consumed by rehearsal. Never rendered into any cognitive view, prompt, or recall display |
 
-**Pending (builder/critic Bug C, in flight as of 2026-09-24):** experience
-entries will gain a private `record_id` field (the workspace record id),
-stored in the fragment but never rendered into any cognitive view. Rationale:
-rehearsal currently reverse-matches fragments to records by exact
-`(source, first_person)` text, so two distinct records with identical text
-collapse into one rehearsal target. The id makes provenance exact; text
-matching remains only as fallback for old id-less fragments.
+Rationale for `record_id`: rehearsal used to reverse-match fragments to
+records by exact `(source, first_person)` text, so two distinct records with
+identical text collapsed into one rehearsal target. The id makes provenance
+exact. Mechanism (corrected 2026-09-25 — the frozen engine's
+`FeltExperience` carries **no** id; the original plan to read `e.id` off the
+view was refuted against the install): `CalibosWorkspace.view()` captures the
+window's record ids in a transient in-memory side-channel
+(`_last_view_ids`) before the `FeltExperience` conversion drops them, and
+`DreamCognition.think` stamps each fragment experience positionally from a
+resolver wired by `cmd_dream`. The resolver is read synchronously inside
+`think()`, at which point the side-channel holds exactly the view being
+handled; on any length mismatch the id is omitted rather than misattributed.
+Matching rule in `salience.rehearse_from_dreams`: match by id when
+`record_id` is present; an id naming no current record is skipped with **no**
+text fallback (falling back there would credit the wrong record — the hazard
+being fixed); only id-less fragments (written before 2026-09-25, or recorded
+without a wired resolver) fall back to exact text matching.
 
 **Reader:** `salience.rehearse_from_dreams` scans every `*.jsonl` in the
 directory, and for each experience with `source == "memory"` records a recall
 at the fragment's tick against the matching workspace record. Recalls are a
-tick-set, so reprocessing a log is idempotent at the data level. **Pending
-(builder/critic Bug B):** the returned count currently increments per match
-even when nothing new is recorded; the fix counts only genuinely new recalls.
+tick-set, so reprocessing a log is idempotent at the data level, and the
+returned count increments only for genuinely new recalls (fixed 2026-09-25).
 
 **Content vs format:** fragments contain first-person memory text. Private,
 local-only, gitignored. The schema above is the public contract.
