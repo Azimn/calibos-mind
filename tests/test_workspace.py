@@ -163,6 +163,47 @@ def test_window_never_exceeds_limit():
     assert sum(CLASS_CAPS.values()) >= 16
 
 
+def test_eviction_archives_instead_of_silently_dropping():
+    """Regression genome: the frozen engine's SubjectiveWorkspace truncates
+    records to a 64-record sliding window on every add. On 2026-09-26 this
+    silently evicted the cartridge identity root and seed memories
+    (experience-1..8) from the live store and falsified the drift metric.
+    CalibosWorkspace keeps a wide window (RECORD_LIMIT) and archives
+    anything that does leave it with a written reason — never silent."""
+    import json
+    import tempfile
+
+    from calibos_mind.consolidate import read_archive
+
+    tmp = Path(tempfile.mkdtemp(prefix="ws-evict-"))
+    ws = CalibosWorkspace(limit=3)
+    ws.availability_path = tmp / "availability.json"
+    try:
+        ids = [ws.add(i + 1, "memory",
+                      f"A distinct memory record number {i} with unique wording {i} z").id
+               for i in range(5)]
+    finally:
+        ws.availability_path = None
+    assert [r.id for r in ws.records] == ids[2:], [r.id for r in ws.records]
+    entries = read_archive(tmp)
+    assert len(entries) == 2, entries
+    archived_ids = {e["record_id"] for e in entries}
+    assert archived_ids == {ids[0], ids[1]}, entries
+    for e in entries:
+        assert e["op"] == "eviction", e
+        assert e["reason"] and e["original_text"], e
+    avail = json.loads((tmp / "availability.json").read_text(encoding="utf-8"))
+    assert set(avail["excluded"]) == archived_ids, avail
+
+
+def test_wide_record_window():
+    """The engine default (64) is a demo window; a persistent mind keeps
+    headroom so eviction is the rare path, not the routine one."""
+    assert CalibosWorkspace.RECORD_LIMIT >= 1000
+    ws = CalibosWorkspace()
+    assert ws.limit == CalibosWorkspace.RECORD_LIMIT
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

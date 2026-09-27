@@ -191,6 +191,47 @@ def test_same_sequence_rejects_reversed_pair():
         assert hits == [], hits
 
 
+# -- dedup is same-source-only ------------------------------------------------
+
+def test_exact_dedup_skips_cross_source_pairs():
+    """Regression genome: identical text under different sources must not be
+    proposed as a duplicate. A perception and a memory of the same content
+    are different epistemic stances; collapsing them destroys provenance."""
+    with CliOnTmp() as ctx:
+        text = "The garden gate was left open again this morning."
+        subject = cli._subject()
+        with subject._transaction():
+            a = subject._add("perception", text, generated_by="note")
+            b = subject._add("memory", text, generated_by="note")
+        ctx.run("consolidate")
+        hits = [p for p in ctx.proposals()
+                if {p["a"], p["b"]} == {a.id, b.id} and p["kind"] == "dedup"]
+        assert hits == [], hits
+
+
+def test_near_dup_skips_cross_source_pairs():
+    """The near-dup pass must also respect source classes: the live #23 case
+    (memory reciting a perception, jaccard 96%) must not be proposed."""
+    with CliOnTmp() as ctx:
+        body = ("Mara left the garden gate open after the long morning walk "
+                "through the orchard and the lower meadow by the stream")
+        subject = cli._subject()
+        with subject._transaction():
+            a = subject._add("perception", "This event concerns me: " + body,
+                             generated_by="note")
+            b = subject._add("memory", "I remember this event: " + body,
+                             generated_by="note")
+        # Sanity: the similarity layer alone WOULD fire without the guard.
+        ta = C.content_tokens("This event concerns me: " + body)
+        tb = C.content_tokens("I remember this event: " + body)
+        assert C.jaccard(set(ta), set(tb)) >= 0.85, C.jaccard(set(ta), set(tb))
+        assert C._same_sequence(ta, tb)
+        ctx.run("consolidate")
+        hits = [p for p in ctx.proposals()
+                if {p["a"], p["b"]} == {a.id, b.id} and p["kind"] == "dedup"]
+        assert hits == [], hits
+
+
 # -- supersession ------------------------------------------------------------
 
 SUP_OLD = "I keep a notebook by the bed; ideas that arrive at night go into it"

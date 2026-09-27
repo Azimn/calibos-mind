@@ -115,6 +115,52 @@ def _near_duplicate(a: frozenset[str], b: frozenset[str]) -> bool:
 
 
 class CalibosWorkspace(SubjectiveWorkspace):
+    # The frozen engine's SubjectiveWorkspace truncates records to
+    # limit=64 on every add — a silent sliding window. Discovered
+    # 2026-09-26: the live store held exactly 64 records and the cartridge
+    # identity root plus seed memories (experience-1..8) were silently
+    # gone, which also falsified the drift metric (R read 1.000 with no
+    # authored records left to measure against). A persistent mind keeps
+    # a wide window; anything that does leave the window is archived
+    # with a written reason instead of being dropped, preserving the
+    # "nothing in the store is ever deleted or silently rewritten"
+    # invariant the whole project rests on.
+    RECORD_LIMIT = 4096
+
+    def __init__(self, *args, limit=RECORD_LIMIT, **kwargs):
+        super().__init__(*args, limit=limit, **kwargs)
+
+    def add(self, tick, source, text, **metadata):
+        # Capture what the engine's truncation would silently evict, before
+        # super().add() drops it: super appends then keeps records[-limit:],
+        # so the evictees are exactly the head that no longer fits.
+        evictees = self.records[: max(len(self.records) + 1 - self.limit, 0)]
+        item = super().add(tick, source, text, **metadata)
+        for evicted in evictees:
+            self._archive_evicted(evicted, tick)
+        return item
+
+    def _archive_evicted(self, record, tick):
+        base = self.availability_path
+        if base is None:
+            # Plain engine use: no archive configured. The wide limit is
+            # the only guard; loss is at least bounded, not silent-by-design.
+            return
+        from pathlib import Path
+
+        from .consolidate import _archive_entry
+        _archive_entry(
+            Path(base).parent,
+            record.id,
+            tick,
+            op="eviction",
+            reason=(f"sliding-window eviction at the {self.limit}-record "
+                    "window: oldest record leaving the window; archived "
+                    "with full text and written reason, never deleted"),
+            original_text=record.first_person,
+            proposal=None,
+        )
+
     # Attached by CalibosSubject when a salience sidecar path is configured.
     # Absent (plain engine use) -> falls back to recency ordering.
     salience_tracker = None

@@ -11,6 +11,160 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-09-26 — inbox-expectation registration (Domain 2 mutation)
+
+### What
+- Domain 2 (Spontaneous thought) adversarial pass, verdict partial: the
+  frozen engine's unfinished-business machinery is complete end-to-end
+  (`_open_records` -> `_project_temporal` escalating "I am still
+  anticipating / The time I expected has passed" temporal records ->
+  `_warrants_cognition` admitting `unresolved_concern` -> "This unfinished
+  matter returns to my attention") but had never fired in 100 live ticks:
+  zero open commitments, zero expectations, zero concerns. Root cause: no
+  code path in calibos_mind ever *registers* an Expectation — a wiring gap,
+  not a theater request.
+
+### Change (calibos_mind/inbox_expectations.py, calibos_mind/cli.py)
+- New module with `sync(subject, inbox_dir, ttl_ticks=3)` and
+  `resolve(subject, pid, *, outcome)`. `sync` scans `prompt-*.json`; a stale
+  prompt (tick age >= TTL) with a `view_tick` registers one frozen-engine
+  `Expectation` (`id="inbox:<pid>"`, proposition carries only pid +
+  queue tick, `created_tick=view_tick`, `due_tick=view_tick+3`,
+  `confidence=0.6`, `status="pending"`). Idempotent: one prompt, one
+  expectation. Prompts without `view_tick` (hand-written/legacy) and
+  corrupt files are skipped — fail closed, never age-guessed from wall
+  clock. A prompt whose file vanished while its expectation is pending
+  (consumed but never answered) is marked `"expired"` with the engine's own
+  expiry bookkeeping; `expired` stays in `_open_records`' open set, so the
+  nagging continues honestly.
+- `resolve` marks the `inbox:<pid>` expectation `"confirmed"` with
+  `outcome="answered"` / `"let-pass"` (pending *or* expired -> confirmed;
+  already-closed or absent is a no-op). No `resolve_expectation` insight is
+  written: these are obligations, not predictions, and "My expectation was
+  supported" would misdescribe a settled debt as a confirmed forecast.
+- `sync` opens a transaction only when it has something to register or
+  expire; empty inbox with no `inbox:` expectations is a verifiable no-op
+  (no write path touched).
+- `cli._run_tick` calls `sync` after `subject.heartbeat()` — waking ticks
+  only; the dream path (`dream_tick`) never calls it, so dream/conduct
+  isolation is unchanged. `cli.cmd_answer` calls `resolve` after a
+  successful `inject_thought` (`"answered"`) and on the `--silent` path
+  (`"let-pass"`), after the surfaced-but-unengaged penalty.
+- Frozen protocol untouched: no prompt-contract change, no new models, no
+  new triggers — the existing `unresolved_concern` path fires from the
+  engine's own math.
+
+### Tests
+- `tests/test_inbox_expectations.py` (16 tests): every spec fitness bullet —
+  empty-inbox no-op (expectations dict untouched, no store write), fresh
+  prompt skipped, stale prompt registered once with exact fields, resync
+  idempotent, hand-written/corrupt payloads skipped, vanished prompt ->
+  expired but still in the open set, `cmd_answer` -> confirmed with no
+  further resurfacing in 25 ticks, `--silent` -> confirmed as let-pass,
+  end-to-end through the frozen engine (temporal records with
+  `concern_links=("expectation:inbox:prompt-0001",)` + an
+  `unresolved_concern` trigger within 60 ticks), empty-inbox control (no
+  hallucinated unfinished business), plus genome pins: `drift` writes
+  nothing logical, `dream_tick` never registers, no shadowing defs.
+- Full suite green (all `tests/test_*.py` + adversarial batteries) except
+  the one pre-existing `test_critic_consolidate_r3.py` failure
+  (`test_critic3_supersede_veto_contraction_negation`), verified failing on
+  the unmodified code too — left for the critic loop.
+
+### Fix (critic round 2, same day): refused-after-consume settles the expectation
+- The critic caught a nag-forever hole: when `cmd_answer` consumed the
+  prompt file but the answer was REFUSED — stale view
+  (`check_prompt_fresh` raising `StalePromptError`) or an inject-time
+  `ValueError` (e.g. duplicate thought) — `resolve()` was never called.
+  The `inbox:<pid>` expectation went pending -> `expired` at the next
+  `sync`, and the engine resurfaced business that could never be done,
+  with no recourse.
+- Both refusal-after-consume paths in `cmd_answer` now call
+  `resolve(subject, args.id, outcome="refused-stale-view")`: the
+  expectation is stored as `"confirmed"` with that outcome and a
+  `resolved_tick` — a first-class category with a written reason (same
+  principle as the `release_commitment` "released" state: psychologically
+  distinct states are stored, not reconstructed). `"expired"` stays
+  reserved for prompts that vanished without any settlement attempt, which
+  keep resurfacing per the spec. `resolve` is already a no-op (no
+  transaction) when no expectation was ever registered, so fresh refused
+  prompts cost nothing.
+- `inbox_expectations.resolve` docstring updated to list all three
+  outcomes: `"answered"`, `"let-pass"`, `"refused-stale-view"`.
+
+### Tests (fix round)
+- `tests/test_inbox_expectations.py`: three new tests (19 total) —
+  `test_refused_stale_answer_confirms_as_refused_stale_view` (refused
+  answer -> confirmed / "refused-stale-view" with `resolved_tick`, then no
+  `unresolved_concern` trigger and no temporal concern-link for that key
+  over 25 ticks), `test_refused_answer_behavior_otherwise_unchanged`
+  (exit 1, "refused" in output, file stays deleted, prompt not
+  re-consumable), `test_refused_duplicate_thought_answer_confirms` (the
+  inject-time refusal path settles the same way).
+- Full suite still green (all `tests/test_*.py` + adversarial batteries)
+  except the same pre-existing `test_critic3_supersede_veto_contraction_negation`
+  failure — untouched by this change, still left for the critic loop.
+
+## 2026-09-26 — record-window eviction bug: seeds silently lost, drift falsified
+
+### What happened
+- The frozen engine's `SubjectiveWorkspace.add` truncates records to a
+  64-record sliding window (`self.records = self.records[-self.limit:]`).
+  This morning the live store held exactly 64 records (experience-9..72):
+  the cartridge identity root and seed memories (experience-1..8) had been
+  silently evicted as the store crossed the window between tick 94 and 100.
+  The "nothing in the store is ever deleted or silently rewritten" invariant
+  was being violated by the engine's demo-sized default.
+- Consequence for measurement: `mind drift` read R = 1.000 with zero
+  authored records left — a falsified reading (there was nothing to measure
+  the grown content against). The tick-94 reading (R = 0.834) was the last
+  honest one; R values are not comparable across the eviction event.
+- The 5 seed memories were restored as experience-73..77 with their original
+  tick (0), `generated_by="cartridge"`, and concepts, re-entering the drift
+  accounting honestly (R = 0.983 post-restore; seeds decayed to low salience,
+  competing on the merits). Experience-6..8 (early non-seed records) are
+  unrecoverable — their contents are gone with the evicted window.
+
+### Fix (calibos_mind/workspace.py)
+- `CalibosWorkspace.RECORD_LIMIT = 4096` (was the inherited engine default
+  64): a persistent mind keeps a wide window.
+- New `CalibosWorkspace.add` override: captures whatever the engine's
+  truncation would drop and routes it through `_archive_evicted`, which
+  writes a full-text entry to `archive/memories.jsonl` (op="eviction") and
+  the availability journal — archived with a written reason, never deleted.
+  No archive configured (plain engine use) -> the wide limit is the only
+  guard, but loss is at least bounded rather than silent-by-design.
+- The frozen engine install is untouched; the fix lives entirely in the
+  subclass.
+
+### Tests
+- `tests/test_workspace.py`: `test_eviction_archives_instead_of_silently_dropping`
+  (overflow past a tiny limit archives evictees with op/reason/text and
+  excludes them from views) and `test_wide_record_window`.
+- Full suite green (consolidate 29, workspace 12, drift 7, sleep 7,
+  interoception 21, all adversarial batteries) except one pre-existing
+  failure in `test_critic_consolidate_r3.py`
+  (`test_critic3_supersede_veto_contraction_negation`), verified failing on
+  the unmodified code too — left for the critic loop.
+
+## 2026-09-26 — consolidation dedup is same-source-only
+
+### What
+- `mind consolidate` proposed a near-duplicate dedup (#23) collapsing a
+  *memory* (experience-68) that recites a *perception* (experience-31, "Lines
+  I do not cross") — same content, different epistemic stance. Archiving
+  the memory would have destroyed the provenance that the lines were
+  recalled and reaffirmed. Rejected with written reason.
+- Root cause: the consolidation passes compared records across source
+  classes, while `workspace.py`'s view dedupe already restricted itself to
+  "same source only". `calibos_mind/consolidate.py` now matches: the exact
+  hash sweep partitions by (hash, source) and the near-dup pass skips
+  cross-source pairs.
+- `tests/test_consolidate.py`: `test_exact_dedup_skips_cross_source_pairs`
+  and `test_near_dup_skips_cross_source_pairs` (regression genome).
+- Also accepted 5 exact-duplicate dedup proposals (#18–#22) from this
+  morning's scan; losers archived with written reasons.
+
 ## 2026-09-25 — first-class "released" commitment semantics (pre-freeze gate 1 closed)
 
 ### What

@@ -600,9 +600,13 @@ def scan(records: list[_Rec], store_tick: int, journal: dict,
         return prop
 
     # -- light pass: exact dedup (hash sweep, no pairwise cost) -------------
-    by_hash: dict[str, list[_Cand]] = {}
+    # Partition by source as well as hash: a perception and a memory of the
+    # same content are different epistemic stances (workspace.py dedupes
+    # "same source only" for the same reason), so dedup never collapses
+    # across source classes.
+    by_hash: dict[tuple[str, str], list[_Cand]] = {}
     for c in cands:
-        by_hash.setdefault(exact_hash(c.rec.text), []).append(c)
+        by_hash.setdefault((exact_hash(c.rec.text), c.rec.source), []).append(c)
     for group in by_hash.values():
         if len(group) < 2:
             continue
@@ -643,10 +647,15 @@ def scan(records: list[_Rec], store_tick: int, journal: dict,
             yield i, j
         stats["pairs"] += n
 
-    # near-dup: Jaccard >= 0.85 OR containment >= 0.92, same sequence.
+    # near-dup: Jaccard >= 0.85 OR containment >= 0.92, same sequence,
+    # same source class. A perception restating a memory (or vice versa)
+    # is not "the same fact worded twice" — the stance differs, and the
+    # recall itself is provenance worth keeping (cf. the exact-dup pass).
     for i, j in pairs_up_to():
         a, b = cands[i], cands[j]
         if a.rec.id in slated or b.rec.id in slated:
+            continue
+        if a.rec.source != b.rec.source:
             continue
         union = a.tokset | b.tokset
         if len(union) < MIN_DUP_UNION:

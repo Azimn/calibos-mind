@@ -155,6 +155,14 @@ def cmd_note(args):
 def _run_tick(subject):
     before = len(subject.inspect()["trace"])
     result = subject.heartbeat()
+    # Inbox-expectation wiring (2026-09-26): stale unanswered prompts become
+    # frozen-engine Expectation records so the engine's own temporal /
+    # unresolved_concern machinery can resurface them. Waking ticks only —
+    # _run_tick never serves dream ticks (dream_tick() is a separate path),
+    # so dream isolation is untouched. sync() opens a transaction only when
+    # it has something to register or expire; empty inbox is a no-op.
+    from .inbox_expectations import sync
+    sync(subject, INBOX)
     # Interoceptive gap: after each waking tick the felt body chases the
     # actual needs with lag + seeded noise. Never on dream ticks (the body
     # is frozen in sleep) — dream_tick() does not come through here.
@@ -233,6 +241,11 @@ def cmd_answer(args):
         # The prompt is already consumed (deleted); it cannot be answered
         # or let pass from a view the store has moved past. If the matter
         # recurs, the engine will queue a fresh prompt.
+        # Settle the expectation as a first-class refused category (not
+        # "expired"): the debt was considered and found unanswerable from
+        # this view, not left to linger without any settlement attempt.
+        from .inbox_expectations import resolve
+        resolve(subject, args.id, outcome="refused-stale-view")
         print(f"{args.id}: refused — {exc}; prompt discarded.")
         return 1
     records = _record_map(subject)
@@ -257,6 +270,11 @@ def cmd_answer(args):
             if r is not None:
                 tracker.note_unengaged(r["id"], r["tick"])
         tracker.save()
+        # The prompt was deliberately let pass: the unfinished business is
+        # settled, not merely sunk. Close the inbox expectation (if one was
+        # ever registered for this prompt) so the engine stops resurfacing it.
+        from .inbox_expectations import resolve
+        resolve(subject, args.id, outcome="let-pass")
         print(f"{args.id}: let pass (silence).")
         return 0
     tid = None
@@ -271,7 +289,13 @@ def cmd_answer(args):
             args.text, trigger_kind="answered",
             generated_by=f"{origin}:{args.id}@{now}")
     except ValueError as exc:
-        # The prompt is already consumed; refuse cleanly instead of a traceback.
+        # The prompt is already consumed; refuse cleanly instead of a
+        # traceback. Settle the expectation as refused-stale-view as well:
+        # the answer was refused after consume, so the debt is closed as
+        # unanswerable rather than left to expire into an endless
+        # resurfacing of business that can never be done.
+        from .inbox_expectations import resolve
+        resolve(subject, args.id, outcome="refused-stale-view")
         print(f"{args.id}: refused — {exc}; nothing recorded.")
         return 1
     assert tid is not None
@@ -281,6 +305,11 @@ def cmd_answer(args):
     if r is not None:
         tracker.add_importance(tid, r["tick"], 0.5)
     tracker.save()
+    # Answering settles the debt: confirm the inbox expectation (if one was
+    # registered — fresh prompts answered before the TTL never got one) so
+    # the engine's unfinished-business machinery stops resurfacing it.
+    from .inbox_expectations import resolve
+    resolve(subject, args.id, outcome="answered")
     print(f"{args.id}: thought recorded as {tid}.")
     # show what the inner ear did with it
     state = subject.inspect()

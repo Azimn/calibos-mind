@@ -91,6 +91,12 @@ time. This list grows; nothing is ever removed.
   measured 0.833). A red test whose premise contradicts measured behavior is a
   test-side correction, not a code defect — prove it with a pre-fix baseline
   before adjudicating.
+- **CLI construction is never mtime-silent** (2026-09-26): `cli._subject()`
+  construction itself rewrites the SQLite payload row (the frozen engine's
+  `__init__` runs INSERT OR REPLACE unconditionally). No CLI command can be
+  mtime-silent today; scope no-write assertions to the operation under test
+  (byte-identical payload content, mtime delta bounded by construction), not
+  to the command.
 
 ## Fitness discipline
 
