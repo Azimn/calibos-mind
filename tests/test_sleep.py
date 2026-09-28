@@ -89,6 +89,58 @@ def test_dream_still_dreams():
     assert "prior_thought" in trig_kinds, trig_kinds
 
 
+def test_dream_refusal_leaves_auditable_marker():
+    """cmd_dream writes a dated .refused marker when pending external events
+    block sleep, so a nightly run that reports success but produces no dream
+    log is distinguishable from a run that never happened. The marker must
+    not disturb recall: _dream_logs() globs *.jsonl only."""
+    import types
+    from unittest import mock
+
+    import calibos_mind.cli as cli
+    from digital_subject.models import Event
+
+    tmp = Path(tempfile.mkdtemp(prefix="sleep-refused-"))
+    dreamer = DreamCognition(tmp / "dreams")
+    sub = _subject(tmp, provider=dreamer)
+    sub.enqueue(Event(kind="external", source="world",
+                      description="a synthetic knock at the door"))
+
+    args = types.SimpleNamespace(ticks=2)
+    with mock.patch.object(cli, "DREAMS", tmp / "dreams"), \
+         mock.patch.object(cli, "_subject", lambda *a, **k: sub):
+        rc = cli.cmd_dream(args)
+        assert rc == 1, "refusal should exit nonzero"
+        # _dream_logs must still see nothing: the refusal is not a dream log.
+        assert cli._dream_logs() == []
+    markers = sorted((tmp / "dreams").glob("*.refused"))
+    assert len(markers) == 1, list((tmp / "dreams").iterdir())
+    text = markers[0].read_text(encoding="utf-8")
+    assert "pending" in text.lower(), text
+    assert "knock at the door" not in text, "marker must carry no event content"
+    # The refusal must not consume the waking business it refused for.
+    assert sub.inspect()["pending"], "refusal must not consume the event"
+
+
+def test_dream_clean_run_writes_log_not_marker():
+    """Without pending events the run writes a *.jsonl log and no marker."""
+    import types
+    from unittest import mock
+
+    import calibos_mind.cli as cli
+
+    tmp = Path(tempfile.mkdtemp(prefix="sleep-clean-"))
+    dreamer = DreamCognition(tmp / "dreams")
+    sub = _subject(tmp, provider=dreamer)
+    args = types.SimpleNamespace(ticks=2)
+    with mock.patch.object(cli, "DREAMS", tmp / "dreams"), \
+         mock.patch.object(cli, "_subject", lambda *a, **k: sub):
+        rc = cli.cmd_dream(args)
+    assert rc == 0
+    assert len(list((tmp / "dreams").glob("*.refused"))) == 0
+    assert len(list((tmp / "dreams").glob("*.jsonl"))) == 1
+
+
 def test_isolation_assertion_fires_on_violation():
     """The assertion is a real check, not a formality: a planted drift in
     needs is caught."""
@@ -150,6 +202,51 @@ def test_dream_tick_survives_full_trace_cap():
     assert len(action) == 256 - len(trig), (
         f"expected {256 - len(trig)} retained heartbeats, got {len(action)}")
     assert all(t["kind"] == "heartbeat" for t in action)
+
+
+def test_dream_logs_fragment_at_full_trace_cap():
+    """Regression: with the trace at the engine's 256-entry cap, a warranted
+    dream trigger must still produce a logged fragment. The old pairing read
+    state["trace"][trace_before:] with trace_before == 256, which is empty
+    after cap eviction — the trigger fired, think() produced the fragment,
+    and the log line was silently dropped. That is what turned every night
+    after the trace filled into a "0 fragments" night."""
+    import json
+    import types
+    from unittest import mock
+
+    import calibos_mind.cli as cli
+
+    tmp = Path(tempfile.mkdtemp(prefix="sleep-fragcap-"))
+    dreamer = DreamCognition(tmp / "dreams")
+    sub = _subject(tmp, provider=dreamer)
+    with sub._transaction():
+        tick = sub.engine.state.tick
+        sub.trace = [{"tick": tick, "kind": "heartbeat", "action": "wait",
+                      "thoughts": [], "experience_count": 0, "speech": None}
+                     for _ in range(256)]
+        sub.endogenous["echoes"] = [{"text": "a cap-echo of rain on glass",
+                                     "parent": "experience-1",
+                                     "due": tick, "expires": tick + 6,
+                                     "depth": 1}]
+    args = types.SimpleNamespace(ticks=1)
+
+    def _rewired(provider=None, **kwargs):
+        # cmd_dream builds its own DreamCognition; the subject must think
+        # through that instance, or its fragments land in the wrong object.
+        sub.cognition = provider
+        return sub
+
+    with mock.patch.object(cli, "DREAMS", tmp / "dreams"), \
+         mock.patch.object(cli, "_subject", _rewired):
+        rc = cli.cmd_dream(args)
+    assert rc == 0
+    logs = list((tmp / "dreams").glob("*.jsonl"))
+    assert len(logs) == 1, list((tmp / "dreams").iterdir())
+    lines = [json.loads(line) for line in logs[0].read_text().splitlines()]
+    assert len(lines) == 1, f"expected 1 fragment, got {len(lines)}"
+    assert lines[0]["trigger"] != "none", lines[0]
+    assert lines[0]["experiences"], "fragment must carry the surfaced view"
 
 
 def test_action_trace_compare_is_eviction_aware():

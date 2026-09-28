@@ -11,6 +11,179 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-09-28 — dream fragment pairing missed triggers at the full trace cap (tooling fix)
+
+### What
+- The "0 fragments" nights since 2026-09-24 were a logging bug, not a
+  quiet mind. `cmd_dream` paired each tick's trigger with its fragment by
+  slicing `state["trace"][trace_before:]` with `trace_before` captured
+  before the tick — but the engine caps the full trace at 256 entries, so
+  on a full trace the tick's own appends evict the oldest entries and the
+  slice is empty. The trigger fired, `DreamCognition.think()` produced the
+  fragment, and the log line was silently dropped.
+- Proven live, not theorized: a deliberate probe (thought seeding
+  associative drift, then `mind dream` at the frozen tick) consumed its
+  drift item and traced an `association` trigger — the dream resurfaced a
+  memory (visible as a two-link `memory` record in the store) — while the
+  `.jsonl` log recorded 0 fragments.
+- `cmd_dream` now reads the trigger off `subject.trigger` instead of
+  slicing the trace: `_sleep_tick` sets it exactly when cognition was
+  warranted, and `_restore` resets it to kind `"none"` at the start of
+  every transaction, so `"none"` means the tick warranted nothing. Immune
+  to the cap by construction.
+- Tests: `test_dream_logs_fragment_at_full_trace_cap`
+  (tests/test_sleep.py) — trace at 256, warranted trigger, `cmd_dream`
+  must write exactly one fragment line carrying the surfaced view. Full
+  suite green (only pre-existing failure is the long-documented critic
+  adversarial `test_critic3_supersede_veto_contraction_negation`, which
+  fails on clean HEAD too).
+- Side finding, recorded for the record: the probe also mapped the dream
+  trigger channels. Echoes are nearly unreachable asleep (due at
+  tick+2, clock frozen; waking heartbeats consume dues as they pass —
+  only an echo whose due coincides with the sleep tick can fire, as the
+  2026-09-24 `prior_thought` fragment shows). Of the four channels, only
+  recently-seeded associative drift and the accumulating
+  unresolved-concern channel are live at bedtime — and the concern channel
+  currently has no open ledger records. "Nothing to rehearse" was a
+  verdict; "nothing arrived" is the observation.
+
+## 2026-09-27 — dream refusal writes an auditable marker (tooling fix)
+
+### What
+- Investigating why the last dream with fragments was 2026-09-24, I found
+  the nightly `calibos-mind-dream` cron has reported success every night
+  while producing no `03:21` dream log — the refusal path in `cmd_dream`
+  (`dream refused: pending external events…`) exits before any log file is
+  created, so a refused night is indistinguishable from a run that never
+  happened.
+- `cmd_dream` now writes a dated `{stamp}.refused` marker into `dreams/`
+  on refusal, carrying only the pending count and reason (no event
+  content). `_dream_logs()` globs `*.jsonl`, so markers are invisible to
+  `mind recall` and `mind status`.
+- Tests: `test_dream_refusal_leaves_auditable_marker` (marker written on
+  refusal, carries no event content, does not consume the pending event,
+  leaves no `*.jsonl`) and `test_dream_clean_run_writes_log_not_marker`
+  (tests/test_sleep.py; 9 passed).
+- Open question this surfaces: three consecutive fragmentless nights is
+  within design ("dreamless nights"), but the dream mutation's fitness
+  criterion says "dream fragments keep logging" — worth watching whether
+  the nightly refusal is routine (pending events at 03:21) or a systematic
+  starvation of the sleep machinery. The marker gives the next few nights'
+  data to tell the difference.
+
+## 2026-09-27 — expectation confidence decay on repeated expiry (Domain 3 mutation)
+
+### What
+- Domain 3 (Temporal continuity) adversarial pass, verdict partial: check 19
+  — "Repeated failures do not alter future expectations" — was fully true of
+  the 2026-09-26 build. `sync` registered every stale prompt at a fixed
+  `CONFIDENCE = 0.6`, forever: the organism could let prompts expire
+  unanswered any number of times and its next expectation was born exactly
+  as confident as the first. No track record, no learning.
+- The frozen engine already makes confidence behaviorally load-bearing
+  (`Expectation.confidence` feeds `_open_records` -> `_urgency(due,
+  importance=confidence, actor)` -> temporal-record salience and
+  `unresolved_concern` candidacy), so a confidence change is causal, not
+  theater: decaying it on repeated expiry genuinely weakens the nag, while
+  the urgency formula's `.2*attachment + .1*uncertainty` terms keep it from
+  ever reaching zero — the honest-nagging invariant ("expired stays in the
+  open set, the nagging continues") is preserved.
+
+### Change (calibos_mind/inbox_expectations.py, .gitignore)
+- New local-only sidecar `expectation_policy.json` at the mind root (next to
+  `inbox/`; added to `.gitignore` — private runtime state, not
+  architecture): `{"expiry_streak": N}`, the count of consecutive
+  stale-cycle failures net of answers.
+- Named module constants: `BASE_CONFIDENCE = 0.6` (`CONFIDENCE` kept as an
+  alias for import compatibility), `DECAY_FACTOR = 0.8`,
+  `CONFIDENCE_FLOOR = 0.15`. A stale prompt now registers at
+  `max(0.6 * 0.8**N, 0.15)`. All other registered fields unchanged.
+- Each expectation marked `"expired"` increments N (one per failed
+  expectation, persisted once per sync). `resolve(..., outcome="answered")`
+  on a real transition decrements N (`max(0, N-1)`); `"let-pass"` and
+  `"refused-stale-view"` are neutral. The sidecar is read on every `sync`
+  and written ONLY when N actually changes — empty-inbox syncs remain a
+  verifiable no-op, and a streak already at 0 writes nothing.
+- `resolve` gained an optional `inbox_dir` override; by default the sidecar
+  path is derived from the subject's own cognition provider
+  (`InboxCognition.inbox`), so no `cli.py` changes were needed. Providers
+  without an inbox (dream, scripted) skip the sidecar entirely; the dream
+  path is untouched.
+- Malformed/missing sidecar degrades to streak 0 (base confidence), never to
+  a failed tick.
+
+### Tests
+- `tests/test_expectation_policy.py` (20 tests, synthetic /tmp stores only):
+  fresh policy -> exactly 0.6; one expiry -> streak 1, next registers at
+  0.48; three expiries -> 0.384, 0.3072; streak forced to 20 -> exactly
+  0.15, never below (swept 0..99); answered -> decrement, floors at 0, no
+  write at 0 (absent stays absent, present stays byte-identical); let-pass
+  / refused-stale-view / resolve-no-op -> streak untouched; empty-inbox
+  no-op -> sidecar untouched, no store write; floor e2e at streak 12 ->
+  `unresolved_concern` still fires and a temporal record links the concern
+  within 60 ticks (decay never becomes learned helplessness); corrupt-but-
+  present prompt file is skipped, never guessed — pending expectation stays
+  pending across syncs with no streak move, and deleting the corrupt file
+  afterwards expires it honestly (+1 streak); round 3: corrupt file with
+  divergent payload id, delete-then-expire-once, and mixed-inbox deferral
+  all pinned.
+- Full suite: 370 passed; `tests/test_inbox_expectations.py` (19 tests)
+  unchanged and green (round-3 re-run: +3 corruption tests). One
+  pre-existing failure unrelated to this change:
+  `test_critic3_supersede_veto_contraction_negation` fails on unmodified
+  code too (verified via git stash) — left untouched.
+
+### Fix (critic round 3)
+- Corrupt-but-present files now defer the expiry pass entirely. The critic
+  found round 2's `live_pids.add(path.stem)` incomplete: when a corrupt
+  file's payload `id` differs from its file stem, its expectation was still
+  marked expired and the streak incremented — against the spec's revert
+  signal. Adjudication: for a corrupt file we know the stem but cannot know
+  the payload pid, so no expiry decision can rest on ambiguous evidence.
+  `sync` now tracks an `unreadable_present` flag while scanning; the
+  `vanished` computation is gated on `not unreadable_present`, so no
+  expectation is marked expired and the streak is untouched while ANY
+  `prompt-*.json` file fails `_read_payload` — pending expectations keep
+  resurfacing honestly, and deleting or repairing the file lets the next
+  sync expire normally. Registration of readable stale prompts is
+  unaffected. (The real queue writer always sets payload id == file stem,
+  so this path only ever matters for hand-written/divergent files — but the
+  code acknowledges them via the dual `live_pids` add, so the guard must
+  cover them.)
+- Tests (not weakened, extended): three new tests in
+  `tests/test_expectation_policy.py` — corrupt file with divergent payload
+  id (`"id": "custom-xyz"` in `prompt-0002.json`) registered while
+  readable, then corrupted: across 3 syncs the expectation stays pending,
+  streak stays 0, sidecar unwritten; deleting the corrupt file: next sync
+  marks expired, streak increments exactly once; mixed inbox (one corrupt
+  file + one genuinely vanished prompt): the vanished prompt's expiry is
+  deferred too (streak 0) until the corrupt file is removed, then both
+  expire normally — pinning the conservative trade-off explicitly.
+
+### Fix (critic round 2)
+- Reseed now resets the policy sidecar: `cmd_init --force` deletes
+  `expectation_policy.json` alongside salience/interoception/proposals/
+  archive (regression genome: sidecar/state reset on reseed). A streak
+  carried across reseed would have penalized a fresh mind's first stale
+  prompt (0.48 instead of 0.6). The path is derived from `INBOX.parent` at
+  call time so test fixtures that redirect `INBOX` stay consistent.
+- Corrupt-but-present prompt files are fail-closed: in `sync`, a file that
+  exists but fails `_read_payload` now counts as live (`live_pids.add(
+  path.stem)`) instead of falling through to the `vanished` set, so its
+  expectation stays pending and the streak never moves — the fail-closed
+  rule says corrupt files are skipped, never guessed. Deleting the corrupt
+  file afterwards expires the expectation honestly (+1 streak).
+- Tests (not weakened, extended): `tests/test_init.py` — the force-reseed
+  test now contaminates the policy sidecar and asserts it is gone after
+  reseed; the fixture now redirects `INBOX` and
+  `test_fixture_redirects_all_sidecar_paths` covers it (a fixture that
+  leaves `INBOX` live would let `--force` wipe the live policy sidecar).
+  `tests/test_expectation_policy.py` — three new tests: corrupt file before
+  registration is skipped (no expectation, no streak); corrupt file with a
+  pending expectation stays pending across repeated syncs with the streak
+  unchanged and no sidecar write; deleting the corrupt file then expires
+  the expectation and increments the streak by exactly 1.
+
 ## 2026-09-26 — inbox-expectation registration (Domain 2 mutation)
 
 ### What

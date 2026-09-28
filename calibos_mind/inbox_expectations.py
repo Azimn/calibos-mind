@@ -18,13 +18,21 @@ carry only the prompt id and its queue tick).
 Fail-closed rules (regression-genome discipline):
 - Prompts without `view_tick` (hand-written/legacy) are SKIPPED. Tick age is
   never guessed from wall clock or file mtime.
-- Corrupt/unreadable prompt files are skipped, never guessed.
+- Corrupt/unreadable prompt files are skipped, never guessed — and while
+  any unreadable ``prompt-*.json`` file is present, the expiry pass is
+  deferred entirely (no expectation marked expired, streak untouched), so
+  ambiguity never expires anything. Registration of readable stale prompts
+  is unaffected.
 - `sync` on an empty inbox with no `inbox:` expectations opens no
-  transaction and touches nothing — a verifiable no-op.
+  transaction and touches nothing — a verifiable no-op. The policy sidecar
+  is only ever *read* on that path, never written.
 - `resolve` on an absent or already-closed expectation is a no-op (no
-  transaction opened).
+  transaction opened, no sidecar touched).
 - `sync` is for waking ticks only. The dream path (`dream_tick`) never calls
   it; dream/conduct isolation is unchanged.
+- The `expectation_policy.json` sidecar is written ONLY when the streak
+  actually changes. Expiry increments it; a genuine answer decrements it;
+  let-pass / refused-stale-view / no-op paths never write it.
 """
 from __future__ import annotations
 
@@ -40,6 +48,28 @@ TTL_TICKS = 3
 #: imposed on ourselves ("I owe an answer"), not a prediction — 0.6 keeps the
 #: engine's urgency math honest without inflating it.
 CONFIDENCE = 0.6
+
+#: Base confidence for a freshly registered inbox expectation (no failures
+#: on the record). Identical to CONFIDENCE; named separately so the decay
+#: policy reads as a policy, not a magic formula.
+BASE_CONFIDENCE = CONFIDENCE
+
+#: Multiplicative confidence decay per consecutive expiry. 0.8: gentle
+#: enough that one or two missed prompts barely move the nag, steep enough
+#: that a long streak of failures is genuinely heard as a track record.
+DECAY_FACTOR = 0.8
+
+#: Confidence floor. The urgency formula's .2*attachment + .1*uncertainty
+#: terms keep the nag nonzero at any confidence, so the floor can be low
+#: without silencing the honest-nagging invariant.
+CONFIDENCE_FLOOR = 0.15
+
+#: Name of the local-only policy sidecar, kept at the mind root next to
+#: `inbox/` (private runtime state, never backed up).
+POLICY_FILE_NAME = "expectation_policy.json"
+
+#: Sidecar JSON key holding the consecutive-expiry streak.
+EXPIRY_STREAK_KEY = "expiry_streak"
 
 #: Prefix for expectation ids minted here. One prompt, one expectation.
 ID_PREFIX = "inbox:"
@@ -63,6 +93,57 @@ def _prompt_pid(payload: dict, path: Path) -> str:
     return str(pid) if pid else path.stem
 
 
+def _policy_path(inbox_dir) -> Path:
+    """Mind-root policy sidecar: ``Path(inbox_dir).parent / "expectation_policy.json"``."""
+    return Path(inbox_dir).parent / POLICY_FILE_NAME
+
+
+def _read_streak(policy_path: Path) -> int:
+    """Read the expiry streak; 0 for a missing, malformed, or negative one.
+
+    A broken sidecar degrades to the base confidence, never to a failed
+    tick. Reading never creates or modifies the file (the empty-inbox no-op
+    invariant)."""
+    try:
+        raw = policy_path.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return 0
+    if not isinstance(data, dict):
+        return 0
+    n = data.get(EXPIRY_STREAK_KEY, 0)
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        return 0
+    return n
+
+
+def _write_streak(policy_path: Path, streak: int) -> None:
+    policy_path.write_text(
+        json.dumps({EXPIRY_STREAK_KEY: streak}), encoding="utf-8")
+
+
+def _confidence_for(streak: int) -> float:
+    """Registration confidence for streak N: ``max(0.6 * 0.8**N, 0.15)``."""
+    return max(BASE_CONFIDENCE * DECAY_FACTOR ** streak, CONFIDENCE_FLOOR)
+
+
+def _streak_inbox_dir(subject, explicit=None):
+    """Where the policy sidecar lives for `subject`'s inbox.
+
+    An explicit dir wins; otherwise the subject's own cognition provider
+    (InboxCognition carries `.inbox`). Providers without an inbox (dream,
+    scripted) have no streak to learn — returns None and the caller skips
+    the sidecar entirely.
+    """
+    if explicit is not None:
+        return Path(explicit)
+    inbox = getattr(getattr(subject, "cognition", None), "inbox", None)
+    return Path(inbox) if inbox is not None else None
+
+
 def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
     """Register stale pending inbox prompts as Expectation records.
 
@@ -76,29 +157,61 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
     ``"expired"`` with the engine's own expiry bookkeeping
     (``resolved_tick``, ``prediction_error``) — honest: we expected to
     answer, we have no evidence we did. ``expired`` stays in the engine's
-    open set (``pending | expired``), so the nagging continues.
+    open set (``pending | expired``), so the nagging continues. If any
+    ``prompt-*.json`` file is present but unreadable, the expiry pass is
+    deferred entirely — no expectation is marked expired and the streak is
+    untouched — until the file is deleted or repaired; registration of
+    readable stale prompts is unaffected. No expiry decisions on ambiguous
+    evidence.
 
     Idempotent: one prompt, one expectation; re-running changes nothing.
     Returns ``{"registered": [...], "expired": [...]}`` — explicit lists,
     never a collapsed zero.
 
+    Confidence policy (2026-09-27): a stale prompt registers at
+    ``max(0.6 * 0.8**N, 0.15)`` where N is the consecutive-expiry streak in
+    the ``expectation_policy.json`` sidecar. Each expectation marked
+    ``"expired"`` increments the streak (persisted once, only when it
+    changes); a genuine answer decrements it via ``resolve``. The rest of
+    the registered fields are unchanged.
+
     The only store write is a single transaction, opened only when there is
     something to register or expire. Empty inbox with no ``inbox:``
-    expectations -> no transaction, expectations dict untouched.
+    expectations -> no transaction, expectations dict untouched, sidecar
+    read but never written.
     """
     inbox = Path(inbox_dir)
+    policy_path = _policy_path(inbox)
+    streak = _read_streak(policy_path)
     state = subject.continuity.state
     expectations = state.expectations
 
     prompt_paths = sorted(inbox.glob("prompt-*.json"))
     live_pids: set[str] = set()
     stale: list[tuple[str, str, int]] = []  # (expectation id, pid, view_tick)
+    unreadable_present = False
 
     if prompt_paths:
         now = subject.engine.state.tick
         for path in prompt_paths:
             payload = _read_payload(path)
             if payload is None:
+                # Fail closed: a present-but-unreadable file is skipped, never
+                # guessed — and while ANY unreadable prompt-*.json file is
+                # present, the expiry pass is deferred entirely (critic round
+                # 3, 2026-09-27). For a corrupt-but-present file we know the
+                # file stem but cannot know the payload pid (payload "id"
+                # may differ from the file stem — the real queue writer
+                # always sets them equal, but hand-written files diverge and
+                # the code acknowledges them via the dual live_pids add
+                # below), so we cannot verify that any pending expectation's
+                # prompt has "vanished without settlement". Ambiguous
+                # evidence never expires anything: pending expectations keep
+                # resurfacing honestly, the streak is untouched, and once
+                # the corrupt file is deleted or repaired the next sync
+                # expires normally. Registration of readable stale prompts
+                # proceeds regardless.
+                unreadable_present = True
                 continue
             pid = _prompt_pid(payload, path)
             live_pids.add(pid)
@@ -118,12 +231,19 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
         # transaction is opened, so no write path is touched at all.
         return {"registered": [], "expired": []}
 
-    vanished = [
-        eid for eid, item in expectations.items()
-        if eid.startswith(ID_PREFIX)
-        and item.status == "pending"
-        and eid[len(ID_PREFIX):] not in live_pids
-    ]
+    vanished: list[str] = []
+    if not unreadable_present:
+        # No expiry decisions on ambiguous evidence: while any prompt file
+        # is present but unreadable, we cannot distinguish "vanished without
+        # settlement" from "corrupt-but-present", so the expiry pass is
+        # deferred wholesale (critic round 3, 2026-09-27). Registration of
+        # readable stale prompts is unaffected.
+        vanished = [
+            eid for eid, item in expectations.items()
+            if eid.startswith(ID_PREFIX)
+            and item.status == "pending"
+            and eid[len(ID_PREFIX):] not in live_pids
+        ]
     if not stale and not vanished:
         return {"registered": [], "expired": []}
 
@@ -140,7 +260,7 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
                 f"{view_tick} ({pid})",
                 tick=view_tick,
                 due_tick=view_tick + ttl_ticks,
-                confidence=CONFIDENCE,
+                confidence=_confidence_for(streak),
                 evidence_ids=(),
                 expectation_id=eid,
             )
@@ -156,10 +276,15 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
                 item.resolved_tick = now
                 item.prediction_error = item.confidence
                 expired.append(eid)
+    if expired:
+        # The streak counts failures: one per expectation that expired
+        # unanswered in this sync. Written once, only when it changed.
+        streak += len(expired)
+        _write_streak(policy_path, streak)
     return {"registered": registered, "expired": expired}
 
 
-def resolve(subject, pid: str, *, outcome: str):
+def resolve(subject, pid: str, *, outcome: str, inbox_dir=None):
     """Close the ``inbox:<pid>`` expectation as confirmed.
 
     Called after a prompt is genuinely dealt with — ``outcome="answered"``
@@ -171,6 +296,15 @@ def resolve(subject, pid: str, *, outcome: str):
     the due date); already-closed expectations and absent ones are a no-op
     with no transaction opened. Returns the expectation item, or None when
     there is nothing to resolve.
+
+    Streak bookkeeping (2026-09-27): ``outcome="answered"`` on a real
+    transition decrements the expiry streak (``N = max(0, N-1)``), persisted
+    to the policy sidecar only when it actually changes — learning works
+    both ways, and a streak already at 0 writes nothing. ``"let-pass"`` and
+    ``"refused-stale-view"`` are neutral: a deliberate choice to disengage,
+    and a blocked attempt, are neither failure nor success, so the streak
+    is untouched. ``inbox_dir`` overrides the sidecar location; by default
+    it is derived from the subject's own cognition provider.
 
     These are obligations, not predictions, so no ``resolve_expectation``
     insight ("My expectation was supported: ...") is written — that prose
@@ -190,4 +324,12 @@ def resolve(subject, pid: str, *, outcome: str):
         item.outcome = str(outcome)
         item.prediction_error = max(0.0, min(1.0, 1.0 - item.confidence))
         item.resolved_tick = now
-        return item
+        result = item
+    if outcome == "answered":
+        policy_dir = _streak_inbox_dir(subject, inbox_dir)
+        if policy_dir is not None:
+            policy_path = _policy_path(policy_dir)
+            streak = _read_streak(policy_path)
+            if streak > 0:
+                _write_streak(policy_path, streak - 1)
+    return result

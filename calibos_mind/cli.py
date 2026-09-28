@@ -117,6 +117,13 @@ def cmd_init(args):
     SalienceTracker(SALIENCE).reset()
     from .interoception import InteroceptionTracker
     InteroceptionTracker(INTEROCEPTION).reset()
+    # The confidence-decay policy sidecar must restart too: a streak carried
+    # across reseed would penalize a fresh mind's first stale prompt
+    # (same bug class as the salience reset above).
+    from .inbox_expectations import POLICY_FILE_NAME
+    expectation_policy = INBOX.parent / POLICY_FILE_NAME
+    if expectation_policy.exists():
+        expectation_policy.unlink()
     if PROPOSALS.exists():
         for child in PROPOSALS.iterdir():
             if child.is_file():
@@ -475,7 +482,17 @@ def cmd_dream(args):
     # experience is stamped with the id of the record that surfaced it.
     # (Deferred lookup: the subject did not exist when the provider was built.)
     dreamer.track_ids(lambda: subject.workspace._last_view_ids)
-    if subject.inspect()["pending"]:
+    pending = subject.inspect()["pending"]
+    if pending:
+        # A refusal must be auditable: the nightly dream cron reports success
+        # either way, and an empty refusal leaves no trace that it ever ran
+        # (or why there is no dream log). The marker is local-only and carries
+        # no thought content — only the pending count and reason.
+        stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        (DREAMS / f"{stamp}.refused").write_text(
+            f"dream refused at {stamp}: {len(pending)} pending external event(s) — "
+            "waking business; handle them first, then sleep.",
+            encoding="utf-8")
         print("dream refused: pending external events are waking business — "
               "handle them first, then sleep.")
         return 1
@@ -484,22 +501,28 @@ def cmd_dream(args):
     total = 0
     for _ in range(args.ticks):
         frag_before = len(dreamer.fragments)
-        trace_before = len(subject.inspect()["trace"])
         # Isolated sleep tick: body, clock, and conduct frozen; isolation
         # assertions run around every tick and raise on violation.
         result = subject.dream_tick()
-        state = subject.inspect()
-        triggers = [t["trigger"] for t in state["trace"][trace_before:]
-                    if t["kind"] == "cognition_trigger"]
-        # One trigger traces exactly one think() call per tick, and the dream
+        # Read the trigger off the subject, not off a trace slice: the engine
+        # caps the full trace at 256 entries, so on a full trace the tick's
+        # own appends evict the oldest entries and a len()-before/len()-after
+        # slice silently misses the trigger — dropping the fragment its
+        # think() call produced. _sleep_tick sets subject.trigger exactly
+        # when cognition was warranted; _restore resets it to kind "none" at
+        # the start of every transaction, so "none" here means this tick
+        # warranted nothing.
+        trig = subject.trigger
+        triggers = [] if trig.get("kind") == "none" else [trig]
+        # One trigger means exactly one think() call per tick, and the dream
         # provider returns silence after the first, so these pair 1:1 in order.
         with log_path.open("a", encoding="utf-8") as fh:
-            for trig, view in zip(triggers, dreamer.fragments[frag_before:]):
+            for tr, view in zip(triggers, dreamer.fragments[frag_before:]):
                 fh.write(json.dumps({
                     "tick": result["tick"],
-                    "trigger": trig["kind"],
-                    "depth": trig.get("depth", 0),
-                    "parents": trig.get("parents", []),
+                    "trigger": tr["kind"],
+                    "depth": tr.get("depth", 0),
+                    "parents": tr.get("parents", []),
                     "experiences": view,
                 }, ensure_ascii=False) + "\n")
                 total += 1

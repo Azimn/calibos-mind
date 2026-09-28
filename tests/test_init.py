@@ -33,6 +33,9 @@ def _patched_cli(tmp: Path):
     DB and SALIENCE alone are not enough: cmd_init --force wipes the
     PROPOSALS and ARCHIVE sidecar directories, and a fixture that
     leaves those pointed at the live tree deletes real working files.
+    INBOX must be redirected too: cmd_init --force resets the
+    expectation-policy sidecar at INBOX's parent, which would otherwise
+    wipe the live policy state during a routine test run.
     """
     db = tmp / "mind.db"
     salience = tmp / "salience.json"
@@ -40,9 +43,10 @@ def _patched_cli(tmp: Path):
     inbox = tmp / "inbox"
     proposals = tmp / "proposals"
     archive = tmp / "archive"
-    saved = (cli.DB, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
-    cli.DB, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS, cli.ARCHIVE = (
-        db, salience, interoception, proposals, archive)
+    saved = (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION,
+             cli.PROPOSALS, cli.ARCHIVE, cli._subject)
+    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS, \
+        cli.ARCHIVE = (db, inbox, salience, interoception, proposals, archive)
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -57,7 +61,8 @@ def _patched_cli(tmp: Path):
 
 
 def _restore(saved):
-    cli.DB, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS, cli.ARCHIVE, cli._subject = saved
+    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS, \
+        cli.ARCHIVE, cli._subject = saved
 
 
 def _args(force):
@@ -95,12 +100,19 @@ def test_force_resets_sidecar_and_restarts_ids():
         tracker.save()
         assert any(v > 0 for v in _sidecar_importance(salience).values())
 
+        # Contaminate the policy sidecar with a streak carried from the
+        # previous incarnation — a fresh mind must not inherit failure.
+        policy = tmp / "expectation_policy.json"
+        policy.write_text(json.dumps({"expiry_streak": 1}), encoding="utf-8")
+
         # Reseed: ids restart at experience-1, sidecar must restart too.
         assert cli.cmd_init(_args(force=True)) == 0
         second_ids = _record_ids(make_subject)
         assert first_ids == second_ids, (first_ids, second_ids)
         assert _sidecar_importance(salience) == {}, \
             "stale importance must not attach to recycled ids"
+        assert not policy.exists(), \
+            "stale expiry streak must not penalize a reseeded mind"
     finally:
         _restore(saved)
 
@@ -124,11 +136,13 @@ def test_fixture_redirects_all_sidecar_paths():
     tmp = Path(tempfile.mkdtemp(prefix="init-paths-"))
     live_proposals, live_archive = cli.PROPOSALS, cli.ARCHIVE
     live_interoception = cli.INTEROCEPTION
+    live_inbox = cli.INBOX
     make_subject, saved = _patched_cli(tmp)
     try:
         for name, live in (("PROPOSALS", live_proposals),
                            ("ARCHIVE", live_archive),
-                           ("INTEROCEPTION", live_interoception)):
+                           ("INTEROCEPTION", live_interoception),
+                           ("INBOX", live_inbox)):
             cur = getattr(cli, name)
             assert cur != live and str(cur).startswith(str(tmp)), \
                 f"cli.{name} not redirected: {cur}"
@@ -146,6 +160,8 @@ def test_fixture_redirects_all_sidecar_paths():
         "fixture leaked redirected paths into the live CLI"
     assert cli.INTEROCEPTION == live_interoception, \
         "fixture leaked redirected interoception path into the live CLI"
+    assert cli.INBOX == live_inbox, \
+        "fixture leaked redirected inbox path into the live CLI"
 
 
 def _main():
