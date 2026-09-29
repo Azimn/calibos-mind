@@ -26,3 +26,8 @@ archive/
 # salience.json — the decay rule lives in calibos_mind/inbox_expectations.py,
 # which IS tracked; only the per-run streak value stays private.
 expectation_policy.json
+# Familiarity traces (2026-09-28): near-miss retrieval streaks. Private
+# metacognitive state, local-only like salience.json — the streak rule and
+# boost live in calibos_mind/familiarity.py, which IS tracked; only the
+# per-run streak counts stay private.
+familiarity.json

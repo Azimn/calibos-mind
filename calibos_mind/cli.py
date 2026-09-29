@@ -40,6 +40,7 @@ INBOX = BASE / "inbox"
 DREAMS = BASE / "dreams"
 SALIENCE = BASE / "salience.json"
 INTEROCEPTION = BASE / "interoception.json"
+FAMILIARITY = BASE / "familiarity.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
@@ -68,7 +69,8 @@ def _subject(provider=None):
         provider = InboxCognition(INBOX)
     subject = CalibosSubject(DB, cartridge, cognition=provider,
                              salience_path=SALIENCE,
-                             interoception_path=INTEROCEPTION)
+                             interoception_path=INTEROCEPTION,
+                             familiarity_path=FAMILIARITY)
     if isinstance(provider, InboxCognition):
         # Stamp queued prompts with the store tick and record sequence at
         # queue time, so `mind answer` can refuse superseded views.
@@ -117,6 +119,12 @@ def cmd_init(args):
     SalienceTracker(SALIENCE).reset()
     from .interoception import InteroceptionTracker
     InteroceptionTracker(INTEROCEPTION).reset()
+    # Familiarity streaks (2026-09-28): stale near-miss streaks must never
+    # attach to recycled ids after reseed (same bug class as the salience
+    # reset above). The sidecar is deleted, not reset: a reseed starts with
+    # no familiarity at all.
+    if FAMILIARITY.exists():
+        FAMILIARITY.unlink()
     # The confidence-decay policy sidecar must restart too: a streak carried
     # across reseed would penalize a fresh mind's first stale prompt
     # (same bug class as the salience reset above).
@@ -178,6 +186,27 @@ def _run_tick(subject):
         tracker.update(dict(subject.engine.state.needs),
                        subject.engine.state.tick)
         tracker.save()
+    # Familiarity traces (2026-09-28): near-miss retrieval streaks fold one
+    # view's outcome into the sidecar, once per waking tick. Never on dream
+    # ticks — dream_tick() does not come through here, so dream views see
+    # the boosted ranking but accumulate no streaks (dream isolation
+    # untouched). Read-only commands never call this either: constructing a
+    # view must not touch the sidecar. Save only when the tracker reports
+    # a change (no-op write discipline).
+    ftracker = subject.workspace.familiarity_tracker
+    if ftracker is not None:
+        ws = subject.workspace
+        if not ws._last_view_ids:
+            # Quiet tick: the heartbeat built no views (no cognition was
+            # warranted), so the side-channels are the class defaults and
+            # observe would see two empty sets — pruning every streak.
+            # Build the tick's view explicitly so each waking tick
+            # contributes one (view, observe) cycle; view construction is
+            # side-effect-free (no store writes), and nothing consumes this
+            # view except the observe below.
+            ws.view()
+        if ftracker.observe(ws._last_view_ids, ws._last_near_miss_ids):
+            ftracker.save()
     state = subject.inspect()
     new = state["trace"][before:]
     triggers = [t["trigger"]["kind"] for t in new if t["kind"] == "cognition_trigger"]
@@ -200,12 +229,21 @@ def cmd_heartbeat(args):
 
 def cmd_inbox(args):
     from .provider import InboxCognition
-    pending = InboxCognition(INBOX).pending()
+    provider = InboxCognition(INBOX)
+    pending = provider.pending()
     if not pending:
         print("inbox empty — nothing waiting for thought.")
         return 0
+    # Mark prompts whose view the store has already moved past: answering
+    # them will be refused (refused-stale-view) by design, so flag them here
+    # rather than letting the list imply they are all answerable. Read-only;
+    # no change to the freshness invariant or its expectation bookkeeping.
+    subject = _subject()
+    seq = subject.workspace.sequence
     for item in pending:
-        print(f"== {item['id']} ==")
+        stale = item.get("view_sequence") != seq
+        flag = " [stale view — answering will be refused]" if stale else ""
+        print(f"== {item['id']}{flag} ==")
         for e in item["experiences"]:
             print(f"  [{e['source']}] {e['first_person'][:110]}")
     return 0
@@ -223,9 +261,15 @@ def cmd_queue(args):
     return 0
 
 
+def _normalize_prompt_id(pid: str) -> str:
+    """Accept '0028' as well as 'prompt-0028' for prompt ids."""
+    return pid if pid.startswith("prompt-") else f"prompt-{pid}"
+
+
 def cmd_answer(args):
     from .provider import InboxCognition, StalePromptError, check_prompt_fresh
     from .subject import validate_thought_text
+    args.id = _normalize_prompt_id(args.id)
     if not args.silent:
         # Validate the thought before consuming the prompt: a malformed
         # thought must not eat the prompt it was meant to answer.

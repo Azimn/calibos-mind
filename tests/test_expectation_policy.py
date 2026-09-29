@@ -326,12 +326,12 @@ def test_corrupt_divergent_id_stays_pending_streak_untouched():
         _write_prompt_custom("prompt-0002.json", "custom-xyz",
                              view_tick=_tick() - TTL_TICKS - 1)
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": ["inbox:custom-xyz"], "expired": []}, \
+        assert out == {"registered": ["inbox:custom-xyz"], "expired": [], "superseded": []}, \
             out
         _corrupt_prompt("prompt-0002")
         for _ in range(3):
             out = sync(cli._subject(), cli.INBOX)
-            assert out == {"registered": [], "expired": []}, out
+            assert out == {"registered": [], "expired": [], "superseded": []}, out
             assert _expectations()["inbox:custom-xyz"].status == "pending"
         assert ctx.streak() == 0
         assert not ctx.policy_path().exists()
@@ -345,20 +345,21 @@ def test_deleting_divergent_corrupt_file_expires_and_streaks_once():
         _write_prompt_custom("prompt-0002.json", "custom-xyz",
                              view_tick=_tick() - TTL_TICKS - 1)
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": ["inbox:custom-xyz"], "expired": []}, \
+        assert out == {"registered": ["inbox:custom-xyz"], "expired": [], "superseded": []}, \
             out
         _corrupt_prompt("prompt-0002")
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": []}, out
+        assert out == {"registered": [], "expired": [], "superseded": []}, out
         (Path(cli.INBOX) / "prompt-0002.json").unlink()
         out = sync(cli._subject(), cli.INBOX)
         assert out == {"registered": [],
-                       "expired": ["inbox:custom-xyz"]}, out
+                       "expired": ["inbox:custom-xyz"],
+                       "superseded": []}, out
         assert _expectations()["inbox:custom-xyz"].status == "expired"
         assert ctx.streak() == 1
         # A further sync changes nothing: the streak moved exactly once.
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": []}, out
+        assert out == {"registered": [], "expired": [], "superseded": []}, out
         assert ctx.streak() == 1
 
 
@@ -374,7 +375,7 @@ def test_mixed_inbox_defers_all_expiry_until_corrupt_file_gone():
         _corrupt_prompt("prompt-0001")
         (Path(cli.INBOX) / "prompt-0002.json").unlink()  # genuinely gone
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": []}, out
+        assert out == {"registered": [], "expired": [], "superseded": []}, out
         assert _expectations()["inbox:prompt-0001"].status == "pending"
         assert _expectations()["inbox:prompt-0002"].status == "pending"
         assert ctx.streak() == 0
@@ -391,7 +392,7 @@ def test_corrupt_file_before_registration_is_skipped_not_registered():
     with CliOnTmp() as ctx:
         _corrupt_prompt("prompt-0001")
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": []}, out
+        assert out == {"registered": [], "expired": [], "superseded": []}, out
         assert "inbox:prompt-0001" not in _expectations()
         assert ctx.streak() == 0
 
@@ -405,7 +406,7 @@ def test_corrupt_file_not_vanished_keeps_pending_across_syncs():
         _corrupt_prompt("prompt-0001")
         for _ in range(2):
             out = sync(cli._subject(), cli.INBOX)
-            assert out == {"registered": [], "expired": []}, out
+            assert out == {"registered": [], "expired": [], "superseded": []}, out
             assert _expectations()["inbox:prompt-0001"].status == "pending"
         assert ctx.streak() == 0
         assert not ctx.policy_path().exists()
@@ -418,10 +419,10 @@ def test_deleting_corrupt_file_then_expires_and_streaks_once():
         _stale_register("prompt-0001", ctx)
         _corrupt_prompt("prompt-0001")
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": []}, out
+        assert out == {"registered": [], "expired": [], "superseded": []}, out
         (Path(cli.INBOX) / "prompt-0001.json").unlink()
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": ["inbox:prompt-0001"]}, out
+        assert out == {"registered": [], "expired": ["inbox:prompt-0001"], "superseded": []}, out
         assert _expectations()["inbox:prompt-0001"].status == "expired"
         assert ctx.streak() == 1
 
@@ -434,14 +435,14 @@ def test_empty_inbox_noop_leaves_sidecar_untouched():
         mtime_before = Path(ctx.tmp / "t.db").stat().st_mtime_ns
         # Case A: sidecar absent stays absent.
         out = sync(sub, cli.INBOX)
-        assert out == {"registered": [], "expired": []}
+        assert out == {"registered": [], "expired": [], "superseded": []}
         assert not ctx.policy_path().exists()
         # Case B: sidecar present stays byte-identical.
         ctx.policy_path().write_text(
             json.dumps({"expiry_streak": 4}), encoding="utf-8")
         raw = ctx.policy_path().read_bytes()
         out = sync(sub, cli.INBOX)
-        assert out == {"registered": [], "expired": []}
+        assert out == {"registered": [], "expired": [], "superseded": []}
         assert ctx.policy_path().read_bytes() == raw
         # mtime must be checked before any helper that constructs a subject
         # (construction itself rewrites the payload row).
@@ -503,7 +504,7 @@ def test_floor_confidence_still_resurfaces_at_streak_12():
     for _ in range(TTL_TICKS + 1):  # tick 4: prompt is stale (age 4 >= 3)
         sub.heartbeat()
     out = sync(sub, inbox)
-    assert out == {"registered": ["inbox:prompt-0001"], "expired": []}
+    assert out == {"registered": ["inbox:prompt-0001"], "expired": [], "superseded": []}
     ex = sub.continuity.state.expectations["inbox:prompt-0001"]
     assert ex.confidence == CONFIDENCE_FLOOR, ex.confidence
     key = "expectation:inbox:prompt-0001"

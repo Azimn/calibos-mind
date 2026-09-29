@@ -35,6 +35,7 @@ from dataclasses import FrozenInstanceError
 from jelly_psiduck.workspace import CognitiveView, FeltExperience, SubjectiveWorkspace
 
 from .consolidate import excluded_ids
+from .familiarity import FAMILIARITY_WINDOW
 from .unresolved import has_unresolved_links
 
 
@@ -185,6 +186,15 @@ class CalibosWorkspace(SubjectiveWorkspace):
     # travel on the view itself (record_ids, already carried by
     # _ViewWithIds and staleness-proof) instead of this side-channel.
     _last_view_ids: tuple = ()
+    # Attached by CalibosSubject when a familiarity sidecar path is
+    # configured. None -> no near-miss streaks, no retrieval nudge.
+    familiarity_tracker = None
+    # Transient near-miss side-channel (in-memory only, never persisted):
+    # the record ids in ranked[:FAMILIARITY_WINDOW] that lost the admission
+    # race in the most recently built view. Same side-channel pattern as
+    # _last_view_ids; read synchronously by cli._run_tick right after the
+    # waking heartbeat. Set on every view() call.
+    _last_near_miss_ids: tuple = ()
     # Callable returning the set of currently-unresolved link keys (see
     # calibos_mind/unresolved.py). Attached by CalibosSubject from live engine
     # state so the Zeigarnik boost intersects links against what is actually
@@ -228,11 +238,15 @@ class CalibosWorkspace(SubjectiveWorkspace):
         if room <= 0:
             ids = tuple(r.id for r in pinned[:VIEW_LIMIT])
             self._last_view_ids = ids
+            # No ranking happened, so nothing can near-miss: pinned records
+            # are always admitted and the rest were never ranked.
+            self._last_near_miss_ids = ()
             return _view_with_ids(
                 tuple(self._view_experience(r) for r in pinned[:VIEW_LIMIT]),
                 ids)
 
         tracker = self.salience_tracker
+        ftracker = self.familiarity_tracker
         if tracker is not None:
             provider = self.open_keys_provider
             open_keys = provider() if provider is not None else None
@@ -243,16 +257,28 @@ class CalibosWorkspace(SubjectiveWorkspace):
                     r.id, r.tick, now_tick,
                     unresolved=has_unresolved_links(
                         r.concern_links, r.expectation_links, open_keys),
-                ), r.tick),
+                ) + (ftracker.boost_for(r.id) if ftracker is not None else 0.0),
+                    r.tick),
                 reverse=True,
             )
         else:
             # No tracker: newest first for selection, matching the stock view's
             # recency bias; the window is re-chronologized before return.
+            # The familiarity nudge feeds the salience-ranked sort key only;
+            # recency-fallback views are unchanged.
             ranked = sorted(rest, key=lambda r: r.tick, reverse=True)
 
         deduped = self._dedupe(ranked)
         admitted = self._fill_capped(deduped, room)
+        # Familiarity near-miss side-channel: records in the familiarity
+        # window that lost the admission race. Pinned records are always
+        # admitted and archived/ineligible records never reach `ranked`,
+        # so neither can near-miss; dedupe-losers and cap-excluded records
+        # CAN near-miss — they are the genuine competitors.
+        admitted_ids = {r.id for r in admitted}
+        self._last_near_miss_ids = tuple(
+            r.id for r in ranked[:FAMILIARITY_WINDOW]
+            if r.id not in admitted_ids)
         if tracker is None:
             admitted = admitted[::-1]
         window = pinned + admitted

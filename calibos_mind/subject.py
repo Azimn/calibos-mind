@@ -36,9 +36,11 @@ def validate_thought_text(text: str) -> str:
 
 
 class CalibosSubject(EndogenousSubject):
-    def __init__(self, *args, salience_path=None, interoception_path=None, **kwargs):
+    def __init__(self, *args, salience_path=None, interoception_path=None,
+                 familiarity_path=None, **kwargs):
         self._salience_path = salience_path
         self._interoception_path = interoception_path
+        self._familiarity_path = familiarity_path
         self._dreaming = False
         super().__init__(*args, **kwargs)
         # Fresh stores get a stock workspace from __init__; existing stores are
@@ -47,6 +49,7 @@ class CalibosSubject(EndogenousSubject):
             self.workspace = CalibosWorkspace.from_dict(self.workspace.to_dict())
         self._attach_salience()
         self._attach_interoception()
+        self._attach_familiarity()
 
     def _attach_salience(self):
         if self._salience_path is not None:
@@ -65,6 +68,15 @@ class CalibosSubject(EndogenousSubject):
             self.workspace.interoception_tracker = InteroceptionTracker(
                 self._interoception_path)
 
+    def _attach_familiarity(self):
+        # Near-miss retrieval streaks (see familiarity.py). The tracker
+        # constructor only reads the sidecar; streaks move exclusively via
+        # observe()+save() on the waking-tick path (cli._run_tick).
+        if self._familiarity_path is not None:
+            from .familiarity import FamiliarityTracker
+            self.workspace.familiarity_tracker = FamiliarityTracker(
+                self._familiarity_path)
+
     def _live_open_keys(self) -> set[str]:
         from .unresolved import live_open_keys
         return live_open_keys(self.engine.state, self.continuity.state)
@@ -74,6 +86,7 @@ class CalibosSubject(EndogenousSubject):
         self.workspace = CalibosWorkspace.from_dict(raw["workspace"])
         self._attach_salience()
         self._attach_interoception()
+        self._attach_familiarity()
         self.trigger = {"kind": "none", "parents": [], "depth": 0}
 
     def _add(self, source, text, **metadata):

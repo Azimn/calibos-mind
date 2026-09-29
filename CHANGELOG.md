@@ -11,6 +11,182 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-09-28 — Queue-time prompt supersede (fixes the stillborn-prompt pattern)
+
+### What
+`InboxCognition.think()` no longer piles one prompt per heartbeat tick into
+the inbox. The inbox now holds at most one standing *engine* prompt: a new
+invitation supersedes the unanswered one, stamping `"engine": true` on its
+own payloads and recording the replaced ids in the newcomer's `"supersedes"`
+list. Scope is deliberately narrow — only prompts `think()` itself minted are
+ever superseded; externally authored prompts (`mind queue`) and
+hand-written/legacy files are untouched, and an unreadable prompt file blocks
+supersede entirely (fail closed, mirroring sync()'s
+no-expiry-on-ambiguous-evidence rule).
+
+`inbox_expectations.sync()` settles the bookkeeping honestly: a vanished
+expectation named in a pending prompt's `"supersedes"` list is confirmed with
+outcome `"superseded"` — considered and closed by a newer view, not
+abandoned — instead of being marked `"expired"`. Neutral on the expiry
+streak, like `refused-stale-view`/`let-pass`. The return shape grows a third
+explicit list (`"superseded"`); the empty-inbox no-op path is unchanged.
+
+### Why
+Three wakes of evidence: every heartbeat tick's seek_contact mints a prompt,
+but the wake answers at most the newest before the store moves past the
+older views — every prompt but the last was refused-stale-view by answer
+time. The refusal path disposed of them cleanly, so nothing corrupted, but
+the loop was manufacturing invitations it knew would expire. Supersede-at-
+queue-time removes the whole stillborn class while preserving the freshness
+invariant (answering from a view the store has moved past stays refused) and
+the expectation audit trail (replaced prompts close as "superseded", never
+silently vanish into "expired").
+
+### Tests
+New `tests/test_supersede.py` (7 tests): replacement keeps one pending
+prompt with the supersedes record, ids stay monotonic, external prompts and
+hand-written files are never superseded, unreadable files block supersede,
+sync() confirms superseded expectations without touching the streak, and a
+genuinely vanished prompt still expires. Existing
+`test_inbox_expectations.py` (19/19) and `test_expectation_policy.py` (20/20)
+pass with updated return-shape assertions; the supersede path forced one
+real design narrowing (the engine-provenance marker) after those suites
+caught think() eating hand-written fixture prompts. Pre-existing failure
+noted, unrelated: `tests/adversarial/test_critic_consolidate_r3.py::
+test_critic3_supersede_veto_contraction_negation` fails on the clean tree
+too.
+
+## 2026-09-28 — `mind inbox` flags stale-view prompts
+
+### What
+`cmd_inbox` now marks any queued prompt whose queue-time view the store has
+already moved past with `[stale view — answering will be refused]`. Read-only
+display change; the refused-stale-view invariant and its expectation
+bookkeeping (`refused-stale-view` / `let-pass` / `answered` resolutions in
+`inbox_expectations`) are untouched.
+
+### Why
+Wake check-ins heartbeat first (per the run body), which queues several
+prompts in a row; each newer prompt's queue-time provenance supersedes the
+last, and any note/think advances the store past them all. The inbox then
+listed prompts as if all were answerable, and every answer attempt on an
+older one died with "view superseded … prompt discarded." The confusion was
+informational, not mechanical: the freshness rule exists to keep drift
+accounting from moving on thoughts the thinker never saw, so it stays.
+The listing now tells the truth up front. Regression test in
+`tests/test_queue.py::test_inbox_flags_stale_view` (179/179 pass).
+
+### Research scratch
+Also added `research/memory-regimes-toy.py`: a 30-day toy sim of the two
+memory regimes inside the merger question (archive vs. decay/rehearsal/
+dream-replay). A 'merge' query returns 46 undifferentiated hits in the
+archive and exactly one charged item in the organism — sharpens the point
+that a unified entity needs a memory architecture that both retains and
+cares, not a warehouse with feelings stapled on.
+
+## 2026-09-28 — familiarity traces: near-miss retrieval streaks (Domain 4 mutation)
+
+### What
+Domain 4 (Memory artificiality) adversarial pass, verdict partial: check 17 —
+"no familiar-but-unplaceable experiences" — was the load-bearing gap.
+Retrieval is a deterministic top-k cut over ACT-R activation; a record
+ranking just below the cut vanished without a trace. New module
+`calibos_mind/familiarity.py` (separately revertible) installs the
+*mechanism* (a near-miss streak with a bounded retrieval nudge), not the
+*symptom*: the streak knows an id, the view still lacks its content until
+the nudge earns admission.
+
+- `FamiliarityTracker`: local-only sidecar `familiarity.json` at the mind
+  root (`{"streaks": {"<record-id>": N}}`, gitignored — private runtime
+  state, not architecture). Named constants: `FAMILIARITY_WINDOW = 32`
+  (2 x VIEW_LIMIT), `FAMILIARITY_THRESHOLD = 3`, `FAMILIARITY_BOOST = 0.5`
+  (flat once the threshold is reached, never scaled by streak length).
+- `CalibosWorkspace.view()`: captures near-miss ids (ranked[:32] not
+  admitted) into a transient `_last_near_miss_ids` side-channel, same
+  pattern as `_last_view_ids`. Pinned records always admit and archived /
+  ineligible records never reach `ranked`, so neither can near-miss;
+  dedupe-losers and cap-excluded records can — the genuine competitors.
+  When the tracker is attached, the sort key becomes
+  `(activation(...) + boost_for(id), tick)`; `activation()` itself is
+  untouched, so `salience.json`, `mind drift`, and R are unaffected.
+- Wiring mirrors salience/interoception exactly: `familiarity_path`
+  constructor arg on `CalibosSubject`, attached per transaction.
+  `cli._run_tick` calls `observe(admitted, near_miss)` once per waking
+  tick and saves only when it returns True (no-op write discipline).
+  Dream ticks never call it (dream views see the boosted ranking but
+  accumulate no streaks); read-only commands never call it.
+- Quiet-tick fix (found by the builder's integration test): on ticks with
+  no cognition the heartbeat builds no views, so the post-heartbeat
+  side-channels were empty and `observe((), ())` pruned every streak —
+  streaks could never reach the threshold. `_run_tick` now builds the
+  tick's view explicitly when the heartbeat built none (view construction
+  is side-effect-free; nothing consumes the view except the observe).
+- `mind init --force` deletes `familiarity.json` (regression genome:
+  stale streaks must never attach to recycled ids).
+
+### Why
+In humans the "something relevant almost surfaced" signal is real and
+causal: persistent familiarity eventually forces recall. This gives the
+organism that state — a bounded, flat, retrieval-time-only nudge — while
+keeping the "unplaceable" part honest. Declined as install-targets:
+checks 2/3/4/6 (no honest failure mode exists under deterministic ranking
++ immutable records; inventing one would be quirks-as-theater), check 8
+(emotional weighting — nothing writes `affect` yet; weighting retrieval
+by it now would paint over the gap).
+
+### Tests
+`tests/test_familiarity.py` (16 tests, synthetic /tmp stores only): every
+spec fitness bullet — 3-cycle streak to exactly 3 with `boost_for == 0.5`,
+4th-view admission then streak reset to 0.0, flat bound at streak 100,
+never-near-missed records carry no streak, archived high-activation
+record never near-misses, no-op discipline (absent stays absent, present
+stays byte-identical), prune/admit/reset return-value contract,
+byte-identical determinism, `init --force` deletes a populated sidecar,
+dream ticks leave the sidecar untouched, pure view construction never
+writes, `activation()` and `salience.json` byte-identical across boosted
+cycles, pinned records never near-miss, no-tracker mode unchanged, and a
+`cli._run_tick` integration (3 waking ticks accumulate streaks; dream
+tick after leaves them alone).
+Full suite: 389 passed; the single exclusion is the pre-existing,
+documented `test_critic3_supersede_veto_contraction_negation` (fails on
+unmodified code too — consolidation round-3 open item, untouched here).
+
+### Revert signal
+- Oscillation pathology (soak: 20 waking views; admission count far above
+  unboosted baseline, or strict admitted/near-miss alternation).
+- A boost admits a record the dedupe or caps deliberately excluded, AND an
+  existing dedupe/cap test regresses.
+- The sidecar is written by `drift`, `status`, `dream`, or any read-only
+  path; or written when `observe` returned False.
+- `init --force` leaves a stale sidecar, or a stale streak attaches to a
+  recycled id.
+- `mind drift` R or any salience-sidecar byte changes on a store where
+  only views were constructed.
+assess_after: 2026-10-08 (same fitness window as the other open mutations).
+
+## 2026-09-28 — `mind answer` accepts bare prompt ids (tooling fix)
+
+### What
+- `mind answer 0028` failed with "no such pending prompt" because
+  `InboxCognition.consume` matches the literal file name `prompt-0028.json`
+  while the inbox display header (`== prompt-0028 ==`) invites copying the
+  numeric half. `cmd_answer` now normalizes the id (`_normalize_prompt_id`)
+  before validation, consume, and expectation resolution, so bare ids work
+  everywhere the full id does.
+- Caught in the wild during the 08:06 wake run: the first answer attempt
+  refused on thought-length, the retry then failed on the id format.
+
+### Why
+- Friction in the core wake loop. The normalization is behavior-preserving:
+  ids already starting with `prompt-` are untouched; expectation outcomes,
+  provenance stamps, and print output use the normalized form consistently.
+
+### Tests
+- Synthetic-only verification: normalization unit asserts + consume-through-
+  normalized-id against a tmp inbox (never the live store).
+- Existing suites green: tests/test_queue.py, test_inbox_expectations.py,
+  test_think_validation.py (29 passed).
+
 ## 2026-09-28 — dream fragment pairing missed triggers at the full trace cap (tooling fix)
 
 ### What

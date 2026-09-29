@@ -165,8 +165,14 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
     evidence.
 
     Idempotent: one prompt, one expectation; re-running changes nothing.
-    Returns ``{"registered": [...], "expired": [...]}`` — explicit lists,
-    never a collapsed zero.
+    Returns ``{"registered": [...], "expired": [...], "superseded": [...]}``
+    — explicit lists, never a collapsed zero.
+
+    Supersession settlement (2026-09-28): a prompt file replaced by the
+    provider's queue-time supersede (the newcomer names it in "supersedes")
+    whose expectation is still pending is confirmed with outcome
+    "superseded" — considered and closed by a newer view, not abandoned —
+    and never touches the expiry streak.
 
     Confidence policy (2026-09-27): a stale prompt registers at
     ``max(0.6 * 0.8**N, 0.15)`` where N is the consecutive-expiry streak in
@@ -229,7 +235,7 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
     elif not any(eid.startswith(ID_PREFIX) for eid in expectations):
         # Empty inbox, nothing of ours to reconcile: provable no-op. No
         # transaction is opened, so no write path is touched at all.
-        return {"registered": [], "expired": []}
+        return {"registered": [], "expired": [], "superseded": []}
 
     vanished: list[str] = []
     if not unreadable_present:
@@ -244,8 +250,26 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
             and item.status == "pending"
             and eid[len(ID_PREFIX):] not in live_pids
         ]
+    # Supersession settlement (2026-09-28): InboxCognition.think() replaces
+    # the standing engine prompt instead of piling up stillborn ones, and
+    # records the replaced ids in the newcomer's "supersedes" list. A
+    # replaced prompt whose expectation was still pending was considered
+    # and closed by a newer view — not abandoned. Confirm it with outcome
+    # "superseded" (neutral on the expiry streak, like refused-stale-view)
+    # instead of marking it expired. Only readable payloads count; an
+    # unreadable file never identifies a supersession (fail closed).
+    superseded_eids: set[str] = set()
+    if not unreadable_present:
+        for path in prompt_paths:
+            payload = _read_payload(path)
+            if payload is None:
+                continue
+            for sp in payload.get("supersedes") or []:
+                superseded_eids.add(expectation_id(str(sp)))
+    vanished_superseded = [eid for eid in vanished if eid in superseded_eids]
+    vanished_expired = [eid for eid in vanished if eid not in superseded_eids]
     if not stale and not vanished:
-        return {"registered": [], "expired": []}
+        return {"registered": [], "expired": [], "superseded": []}
 
     with subject._transaction():
         now = subject.engine.state.tick
@@ -266,7 +290,7 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
             )
             registered.append(eid)
         expired: list[str] = []
-        for eid in vanished:
+        for eid in vanished_expired:
             item = subject.continuity.state.expectations.get(eid)
             if item is not None and item.status == "pending":
                 # The prompt is gone and was never answered. Mirror the
@@ -276,12 +300,28 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
                 item.resolved_tick = now
                 item.prediction_error = item.confidence
                 expired.append(eid)
+        superseded_closed: list[str] = []
+        for eid in vanished_superseded:
+            item = subject.continuity.state.expectations.get(eid)
+            if item is not None and item.status == "pending":
+                # Considered and closed by a newer view: confirm (settled),
+                # mirroring resolve()'s confirmed shape — status, outcome,
+                # and resolved tick are the honest audit trail. Neutral on
+                # the expiry streak: a replacement is neither a failure nor
+                # a genuine answer.
+                item.status = "confirmed"
+                item.outcome = "superseded"
+                item.prediction_error = max(
+                    0.0, min(1.0, 1.0 - item.confidence))
+                item.resolved_tick = now
+                superseded_closed.append(eid)
     if expired:
         # The streak counts failures: one per expectation that expired
         # unanswered in this sync. Written once, only when it changed.
         streak += len(expired)
         _write_streak(policy_path, streak)
-    return {"registered": registered, "expired": expired}
+    return {"registered": registered, "expired": expired,
+            "superseded": superseded_closed}
 
 
 def resolve(subject, pid: str, *, outcome: str, inbox_dir=None):

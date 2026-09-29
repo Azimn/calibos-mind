@@ -143,3 +143,30 @@ def test_queue_ids_monotonic_after_consume():
         assert cli.main(["answer", "prompt-0001", "--silent"]) == 0
         assert cli.main(["queue", "second"]) == 0
         assert (cli.INBOX / "prompt-0002.json").exists()
+
+
+def test_inbox_flags_stale_view():
+    """`mind inbox` marks prompts the store has moved past (read-only; the
+    refused-stale-view invariant is unchanged)."""
+    import io
+    from contextlib import redirect_stdout
+    with CliOnTmp():
+        subject = cli._subject()
+        assert cli.main(["queue", "answer me tonight"]) == 0
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            assert cli.main(["inbox"]) == 0
+        fresh = buf.getvalue()
+        assert "prompt-0001" in fresh, fresh
+        assert "stale view" not in fresh, fresh
+        # An intervening store write moves the sequence past the prompt's
+        # queue-time view: the listing must now say so.
+        subject.inject_thought("an intervening thought",
+                               trigger_kind="voluntary",
+                               generated_by="voluntary")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            assert cli.main(["inbox"]) == 0
+        stale = buf.getvalue()
+        assert "prompt-0001" in stale, stale
+        assert "stale view" in stale, stale

@@ -133,7 +133,7 @@ def test_sync_empty_inbox_is_noop():
         assert _expect_dict() == {}
         mtime_before = Path(ctx.tmp / "t.db").stat().st_mtime_ns
         out = sync(sub, cli.INBOX)
-        assert out == {"registered": [], "expired": []}
+        assert out == {"registered": [], "expired": [], "superseded": []}
         # mtime must be checked before any helper that constructs a subject
         # (construction itself rewrites the payload row).
         assert Path(ctx.tmp / "t.db").stat().st_mtime_ns == mtime_before, \
@@ -156,7 +156,7 @@ def test_fresh_prompt_not_registered():
         now = _tick()
         _write_prompt("prompt-0007", view_tick=now)  # age 0 < TTL
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": []}
+        assert out == {"registered": [], "expired": [], "superseded": []}
         assert _expect_dict() == {}
 
 
@@ -166,7 +166,7 @@ def test_stale_prompt_registers_exactly_once():
         vt = now - TTL_TICKS - 2
         _write_prompt("prompt-0007", view_tick=vt)
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": ["inbox:prompt-0007"], "expired": []}
+        assert out == {"registered": ["inbox:prompt-0007"], "expired": [], "superseded": []}
         ex = _expectations()["inbox:prompt-0007"]
         assert ex.id == "inbox:prompt-0007"
         assert ex.proposition == (
@@ -179,7 +179,7 @@ def test_stale_prompt_registers_exactly_once():
         assert ex.status == "pending"
         # Resync is idempotent: one prompt, one expectation.
         out2 = sync(cli._subject(), cli.INBOX)
-        assert out2 == {"registered": [], "expired": []}
+        assert out2 == {"registered": [], "expired": [], "superseded": []}
         assert [e for e in _expectations() if e.startswith("inbox:")] == \
             ["inbox:prompt-0007"]
 
@@ -209,7 +209,7 @@ def test_handwritten_without_view_tick_skipped():
             (Path(cli.INBOX) / f"{pid}.json").write_text(
                 json.dumps(payload), encoding="utf-8")
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": []}
+        assert out == {"registered": [], "expired": [], "superseded": []}
         assert _expect_dict() == {}, \
             "a prompt without a real view_tick must never be age-guessed"
 
@@ -219,7 +219,7 @@ def test_corrupt_prompt_file_skipped():
         (Path(cli.INBOX) / "prompt-0011.json").write_text(
             "{not json", encoding="utf-8")
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": []}
+        assert out == {"registered": [], "expired": [], "superseded": []}
         assert _expect_dict() == {}
 
 
@@ -235,7 +235,7 @@ def test_vanished_prompt_marked_expired_still_open():
         # prompt vanished without an answer.
         (Path(cli.INBOX) / "prompt-0007.json").unlink()
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": ["inbox:prompt-0007"]}
+        assert out == {"registered": [], "expired": ["inbox:prompt-0007"], "superseded": []}
         ex = _expectations()["inbox:prompt-0007"]
         assert ex.status == "expired"
         assert ex.resolved_tick is not None
@@ -511,7 +511,7 @@ def test_unresolved_concern_fires_after_due_passes():
     for _ in range(TTL_TICKS + 1):  # tick 4: prompt is stale (age 4 >= 3)
         sub.heartbeat()
     out = sync(sub, inbox)
-    assert out == {"registered": ["inbox:prompt-0001"], "expired": []}
+    assert out == {"registered": ["inbox:prompt-0001"], "expired": [], "superseded": []}
     key = "expectation:inbox:prompt-0001"
     used = _run_until_unresolved(sub, key, 60)
     assert used is not None, \

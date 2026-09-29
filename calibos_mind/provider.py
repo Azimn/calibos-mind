@@ -21,6 +21,14 @@ class StalePromptError(ValueError):
     """A queued prompt whose view has been superseded. Never answer it."""
 
 
+def _read_payload(path: Path) -> dict | None:
+    """Parse a prompt file; None when unreadable (fail closed)."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 def check_prompt_fresh(payload: dict, sequence: int) -> None:
     """Refuse a prompt queued from a view the store has moved past.
 
@@ -85,6 +93,40 @@ class InboxCognition:
         return f"prompt-{n:04d}"
 
     def think(self, view):
+        # Queue-time supersede (2026-09-28): the engine's seek_contact ticks
+        # each mint a prompt, but three wakes of evidence show every prompt
+        # but the newest is refused-stale-view by answer time — stillborn
+        # invitations the refusal path must then dispose of. So the inbox
+        # holds at most one standing engine prompt: a new invitation
+        # supersedes the unanswered one, and the replacement records which
+        # prompts it superseded so expectation bookkeeping can settle them
+        # honestly (inbox_expectations.sync confirms them "superseded"
+        # instead of marking them "expired").
+        #
+        # Scope is deliberately narrow: only prompts this method queued
+        # (stamped "engine": true below) are ever superseded. Externally
+        # authored prompts (queue_external) are a distinct invitation
+        # channel, and hand-written/legacy files are left exactly as they
+        # were — supersede must not eat invitations it did not mint.
+        # Fail closed on ambiguity: while any prompt file is present but
+        # unreadable, nothing is deleted and this tick queues alongside it
+        # (status quo), mirroring sync()'s no-expiry-on-ambiguous-evidence
+        # rule.
+        pending_engine: list[tuple[Path, str]] = []
+        unreadable = False
+        for path in sorted(self.inbox.glob("prompt-*.json")):
+            payload = _read_payload(path)
+            if payload is None:
+                unreadable = True
+                break
+            if payload.get("engine") and not payload.get("external"):
+                pending_engine.append(
+                    (path, str(payload.get("id", path.stem))))
+        superseded: list[str] = []
+        if not unreadable:
+            for path, spid in pending_engine:
+                path.unlink()
+                superseded.append(spid)
         pid = self._next_id()
         prompt = cognitive_prompt(view)
         view_tick = view_sequence = None
@@ -126,8 +168,19 @@ class InboxCognition:
             "prompt": prompt,
             "view_tick": view_tick,
             "view_sequence": view_sequence,
+            # Engine-provenance marker: only prompts minted by think() carry
+            # this, and only these are ever superseded by a later think().
+            # External prompts (queue_external) and hand-written/legacy
+            # files never carry it and are never touched.
+            "engine": True,
             "experiences": experiences,
         }
+        if superseded:
+            # Queue-time provenance for the replacement: which standing
+            # engine prompts this invitation superseded. sync() uses it to
+            # settle their expectations as "superseded" (considered, closed
+            # by a newer view) rather than "expired" (abandoned).
+            payload["supersedes"] = superseded
         (self.inbox / f"{pid}.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
         return None
