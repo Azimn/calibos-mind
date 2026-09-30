@@ -156,6 +156,10 @@ def cmd_note(args):
     else:
         subject.enqueue(Event(args.kind, args.source, args.text, tags=tags, valence=args.valence))
     _run_tick(subject)
+    # Confirmation for the operator (2026-09-29): cmd_note used to print
+    # only the tick line, leaving it ambiguous whether the note landed —
+    # which caused duplicate notes when a write was retried "just in case".
+    print(f"note recorded (kind={args.kind})")
     # Valence-tagged notes mark their records as important.
     if args.valence:
         tracker = _tracker(subject)
@@ -249,14 +253,60 @@ def cmd_inbox(args):
     return 0
 
 
+PERSON_RESERVED = frozenset({"self", "world", "system", "environment"})
+
+
+def normalize_person_attribution(value):
+    """Validate/normalize a `--from <person>` value (queue-time, human-supplied).
+
+    Returns the stripped name, or None when no attribution was given.
+    Raises ValueError for empty or reserved values — the same words the
+    frozen runtime's message() rejects — so bad input fails at the CLI,
+    not mid-answer.
+    """
+    if value is None:
+        return None
+    person = value.strip()
+    if not person:
+        raise ValueError("--from requires a non-empty person name")
+    if person in PERSON_RESERVED:
+        raise ValueError(f"--from {person!r} is reserved; name an external person")
+    return person
+
+
+def _register_person_contact(subject, payload):
+    """Register one genuine contact event for a person-attributed prompt.
+
+    The person's own words (`payload["prompt"]`) are the contact record —
+    nothing invented. Fail closed: registration must never break
+    answering. If subject.message() raises (over-long text, reserved
+    speaker, anything the runtime rejects), skip registration with a
+    stderr warning and let the answer proceed normally.
+    """
+    person = payload.get("from")
+    if not isinstance(person, str) or not person.strip():
+        return
+    person = person.strip()
+    try:
+        subject.message(person, payload["prompt"])
+    except Exception as exc:  # fail closed by design — never break answering
+        print(f"warning: contact with {person!r} skipped ({exc})", file=sys.stderr)
+
+
 def cmd_queue(args):
     from .provider import InboxCognition
+    try:
+        from_person = normalize_person_attribution(args.from_person)
+    except ValueError as exc:
+        print(f"queue: {exc}", file=sys.stderr)
+        return 2
     provider = InboxCognition(INBOX)
     # Wire the queue-time clock through the subject so the prompt carries
     # verifiable provenance; hand-written prompt JSON can never have it.
     _subject(provider=provider)
     pid = provider.queue_external(args.prompt, source=args.source,
-                                  first_person=args.experience)
+                                  first_person=args.experience,
+                                  from_person=from_person)
     print(f"{pid}: queued ({args.source}).")
     return 0
 
@@ -326,6 +376,9 @@ def cmd_answer(args):
         # ever registered for this prompt) so the engine stops resurfacing it.
         from .inbox_expectations import resolve
         resolve(subject, args.id, outcome="let-pass")
+        # A person-attributed prompt let pass is still contact with a
+        # person: register the genuine message-kind event (fail closed).
+        _register_person_contact(subject, payload)
         print(f"{args.id}: let pass (silence).")
         return 0
     tid = None
@@ -356,6 +409,10 @@ def cmd_answer(args):
     if r is not None:
         tracker.add_importance(tid, r["tick"], 0.5)
     tracker.save()
+    # A person-attributed prompt answered is genuine contact with a person:
+    # register the message-kind event through the frozen runtime's
+    # relationship machinery (fail closed — never breaks the answer).
+    _register_person_contact(subject, payload)
     # Answering settles the debt: confirm the inbox expectation (if one was
     # registered — fresh prompts answered before the TTL never got one) so
     # the engine's unfinished-business machinery stops resurfacing it.
@@ -759,6 +816,10 @@ def main(argv=None):
                    help="experience source label (default: invitation)")
     p.add_argument("--experience", default=None, dest="experience",
                    help="first-person experience text (default: the prompt text)")
+    p.add_argument("--from", default=None, dest="from_person",
+                   help="optional human-supplied person attribution: registers one "
+                        "message-kind contact event with that person at answer time "
+                        "(--source stays a separate attribution-category axis)")
     p.set_defaults(func=cmd_queue)
 
     p = sub.add_parser("answer", help="answer a queued prompt")

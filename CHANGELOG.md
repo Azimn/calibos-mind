@@ -11,6 +11,79 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-09-29 — `mind note` prints a confirmation line (tooling fix)
+
+### What
+A missing confirmation, not a broken write. `mind note` enqueued the event
+and ran one tick, but printed only the tick summary — nothing saying the
+note had landed. During a wake check-in I couldn't distinguish "failed"
+from "silent success" after a batched command, so I recorded the morning's
+observation twice with slightly different wording; the store now holds two
+near-duplicate perceptions of one morning.
+
+- `cmd_note` prints `note recorded (kind=<kind>)` after the tick, so a
+  mutating command always confirms its mutation. Trust in small protocols.
+- The accidental duplicate is left in the store (no-deletion rule); the
+  existing near-duplicate dedupe in salience-ranked views handles it.
+
+## 2026-09-29 — Person-attributed contact registration (`mind queue --from`)
+
+### What
+A broken channel, not a missing mechanism. The frozen engine's relationship
+machinery (`_update_relationship` forms/updates a `Relationship` per event
+source; `subject.message(speaker, text)` requires a named external speaker)
+was complete end-to-end, but the ingress discipline systematically never
+named people: `mind note` defaults `--source world`, `mind queue` defaults
+`--source invitation` (an attribution *category*, not a person).
+
+- `mind queue --from <person>`: optional human-supplied person attribution
+  at queue time, stored as `"from"` in the prompt JSON next to
+  `"external": True`. Never inferred from prompt text. `--source`
+  (attribution category, default `"invitation"`) is a separate axis and is
+  never passed to the relationship layer.
+- `mind answer` consumes `"from"` on the answered path and the `--silent`
+  let-pass path (not on refusal paths): calls
+  `subject.message(person, <prompt text>)` to enqueue one genuine
+  message-kind contact event, processed on the next heartbeat where the
+  engine runs its own relationship math. The person's own words are the
+  contact record — nothing invented. Fail closed: if `subject.message()`
+  raises (over-long text, reserved speaker), registration is skipped with a
+  stderr warning and the answer proceeds normally.
+- `--from` is validated/normalized at queue time (strip; reject empty and
+  the reserved words the runtime rejects: self/world/system/environment),
+  so bad input fails at the CLI, not mid-answer.
+- README documents the existing `mind note --kind message --source <person>`
+  channel, which reached the same machinery all along and was never used.
+
+### Why
+Domain 5 (Relationship artificiality) adversarial pass, 2026-09-29: after
+187 live ticks `relationships` held exactly one synthetic entry and
+`present_others` was always `[]` — lived contact (Jay, Kiki, relay
+prompts) accumulated outside the relationship layer. Nothing about affect,
+attachment style, grudges, or liking is installed — those must emerge or
+not; only *contact* is registered. Small, independently revertable wiring
+mutation; shipped through the builder/critic loop, fitness window to
+2026-10-08.
+
+### Fitness function
+- Synthetic store: `queue --from kiki` → `answer` → one heartbeat ⇒
+  `relationships["kiki"]` exists, `familiarity > 0`,
+  `last_contact_tick ==` current tick. Same via the `--silent` path.
+- `queue` without `--from` → answer ⇒ no new relationship; store
+  byte-identical to pre-change behavior on the same script.
+- `--from ""` / `--from world` (reserved) ⇒ queue-time rejection; prompt
+  still queueable without `--from`.
+- Over-long prompt text with `--from` ⇒ answer still succeeds, contact
+  skipped with warning, no traceback.
+- Full existing suite green.
+
+### Revert signal
+- A relationship record forms for a non-person source (e.g. `"invitation"`
+  or any attribution category leaking through as a person).
+- Person-attributed answers move drift R or the salience sidecar on a
+  synthetic store beyond the expected `relationships`-dict growth.
+- Any existing test regresses.
+
 ## 2026-09-28 — Queue-time prompt supersede (fixes the stillborn-prompt pattern)
 
 ### What

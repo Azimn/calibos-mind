@@ -185,7 +185,8 @@ class InboxCognition:
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
         return None
 
-    def queue_external(self, prompt_text, source="invitation", first_person=None):
+    def queue_external(self, prompt_text, source="invitation", first_person=None,
+                       from_person=None):
         """Queue an externally-authored prompt (invitation, relay message...).
 
         Unlike think(), the prompt text is authored outside a cognition
@@ -194,7 +195,15 @@ class InboxCognition:
         `mind answer` can verify the store has not moved past queue time.
         Without a wired clock the payload carries no provenance and
         answering it is refused (fail closed), same as a legacy prompt.
-        Returns the prompt id.
+
+        `from_person` is an optional human-supplied person attribution
+        (e.g. "kiki", "jay"). It is stored as "from" next to "external"
+        and is consumed at answer time by `mind answer`, which registers
+        one genuine message-kind contact event with the frozen engine's
+        relationship machinery via subject.message(). It never becomes an
+        event source by any other path; the attribution category
+        (`source`, default "invitation") is a separate axis and is never
+        passed to the relationship layer. Returns the prompt id.
         """
         pid = self._next_id()
         view_tick = view_sequence = None
@@ -217,6 +226,17 @@ class InboxCognition:
                  else prompt_text}
             ],
         }
+        # Person attribution for the contact channel (2026-09-29):
+        # human-supplied at queue time (`mind queue --from <person>`),
+        # never inferred from prompt text. Consumed only by `mind answer`,
+        # which registers one message-kind contact event through
+        # subject.message(). The key is absent unless --from was given, so
+        # prompts without person attribution are byte-identical to the
+        # pre-change shape; the attribution category ("source", default
+        # "invitation") is a separate axis and must never reach the
+        # relationship layer.
+        if from_person is not None:
+            payload["from"] = from_person
         (self.inbox / f"{pid}.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
         return pid

@@ -13,12 +13,19 @@ always a valid answer.
 ## Use
 
     ./mind note "something I want it to know" [--tags a,b] [--valence 0.4]
+    ./mind note --kind message --source <person> "what they said"
+                                     # the existing direct contact channel: a named person's own
+                                     # words enter as a message-kind event (the --from PERSON
+                                     # variant of `mind queue` reaches the same machinery)
     ./mind heartbeat [--ticks N]     # let time pass; prompts queue to inbox/
     ./mind inbox                     # what is waiting for thought
-    ./mind queue "prompt" [--source S] [--experience "first-person"]
+    ./mind queue "prompt" [--source S] [--experience "first-person"] [--from PERSON]
                                      # queue an externally-authored prompt (invitation, relay
                                      # message) with queue-time provenance; hand-written prompt
-                                     # JSON can never carry it and will be refused on answer
+                                     # JSON can never carry it and will be refused on answer.
+                                     # --from registers one message-kind contact event with the
+                                     # named person at answer time, so the engine's relationship
+                                     # machinery can observe real people (never inferred from text)
     ./mind answer <id> "thought"     # think it (through the inner ear)
     ./mind answer <id> --silent      # let it pass
     ./mind think "thought"           # voluntary thought, no prompt needed
