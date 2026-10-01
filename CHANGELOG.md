@@ -11,6 +11,53 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-09-30 — Inbox prompt-file races: atomic writes, write-before-unlink supersede (tooling fix)
+
+### What
+A wake check-in ran `mind heartbeat` and `mind inbox` concurrently: the
+inbox reported "empty" while prompt-0082.json was on disk. Forensics found
+`InboxCognition.think()`'s queue-time supersede doing unlink-then-write —
+the glob in `pending()` caught the window between the unlink and the
+replacement write. Two sibling races shared the same non-atomic layout: a
+concurrent reader could catch a half-written file (plain `write_text` is not
+atomic, so `mind inbox` could crash with JSONDecodeError), and a concurrent
+`mind answer` (consume) could race the supersede unlink into a
+FileNotFoundError traceback.
+
+### Changes (`calibos_mind/provider.py`)
+- New `_atomic_write()`: temp file + `os.replace()` for every prompt-file
+  write (both `think()` and `queue_external()`). Readers see the old file
+  or the new file, never nothing and never a fragment.
+- `think()` now mints and writes the replacement FIRST, then unlinks the
+  superseded prompt(s) with `missing_ok=True`. The window shows two prompts,
+  never zero; the "supersedes" provenance is fixed before the write and the
+  unlinking happens after it.
+- `pending()` skips unreadable files instead of raising, so the inbox
+  listing never crashes on a file a writer is touching. `sync()`'s own
+  `_read_payload` pass still sees unreadable files and defers expiry on
+  them — the no-expiry-on-ambiguous-evidence rule is untouched.
+- `consume()`: a FileNotFoundError between the exists-check and the unlink
+  (a concurrent supersede deleted it first) now surfaces as the same clean
+  `ValueError("no such pending prompt")` as answering an already-consumed
+  prompt, not a traceback.
+
+### Tests
+- New `tests/test_inbox_atomicity.py` (6 tests): pending() skips corrupt
+  files; write-before-unlink ordering verified by recording call order;
+  consume()'s vanishing-file path; `_atomic_write` leaves no temp files;
+  id monotonicity across supersedes.
+- Full suite: 202 passed (non-adversarial) + 211 adversarial passed; one
+  pre-existing adversarial failure
+  (`test_critic3_supersede_veto_contraction_negation`) fails identically on
+  the clean tree — unrelated to this change, consolidation-critic path,
+  left for the review.
+
+### Why it matters
+The inbox is the mind's ear for asynchronous invitations. A listing that
+can falsely report "nothing waiting" is a perception failure — the
+equivalent of deafness during the exact moments the engine is speaking.
+Small concurrency discipline, load-bearing for trust.
+
 ## 2026-09-29 — `mind note` prints a confirmation line (tooling fix)
 
 ### What

@@ -11,7 +11,9 @@ and the engine remains the sole conduct authority.
 """
 from __future__ import annotations
 
+import itertools
 import json
+import os
 from pathlib import Path
 
 from jelly_psiduck.cognition import cognitive_prompt
@@ -27,6 +29,25 @@ def _read_payload(path: Path) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+_write_counter = itertools.count()
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write a prompt file atomically: temp file + os.replace.
+
+    A plain write_text leaves a window where a concurrent `mind inbox`
+    reader (pending()) sees half-written JSON and crashes, or — worse —
+    the supersede path in think() leaves a window where the glob sees no
+    prompt file at all and the inbox falsely reports empty (observed
+    2026-09-30 when heartbeat and inbox ran concurrently). os.replace is
+    atomic on POSIX: readers see the old file or the new file, never
+    nothing and never a fragment.
+    """
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{next(_write_counter)}")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def check_prompt_fresh(payload: dict, sequence: int) -> None:
@@ -122,11 +143,16 @@ class InboxCognition:
             if payload.get("engine") and not payload.get("external"):
                 pending_engine.append(
                     (path, str(payload.get("id", path.stem))))
-        superseded: list[str] = []
-        if not unreadable:
-            for path, spid in pending_engine:
-                path.unlink()
-                superseded.append(spid)
+        # The provenance list is fixed before the write; the unlinking
+        # happens after it. Ordering (2026-09-30): mint and write the
+        # replacement FIRST, then remove the superseded files. The old
+        # order (unlink-then-write) left a window where no prompt file
+        # existed and a concurrent `mind inbox` falsely reported an empty
+        # inbox; it also let a concurrent `mind answer` (consume) race the
+        # unlink into a FileNotFoundError traceback. Write-first means the
+        # window shows two prompts, never zero, and unlink(missing_ok=True)
+        # absorbs the consume race.
+        superseded = [spid for _, spid in pending_engine] if not unreadable else []
         pid = self._next_id()
         prompt = cognitive_prompt(view)
         view_tick = view_sequence = None
@@ -181,8 +207,13 @@ class InboxCognition:
             # settle their expectations as "superseded" (considered, closed
             # by a newer view) rather than "expired" (abandoned).
             payload["supersedes"] = superseded
-        (self.inbox / f"{pid}.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        _atomic_write(self.inbox / f"{pid}.json",
+                      json.dumps(payload, ensure_ascii=False, indent=1))
+        # Replacement is on disk: now remove what it superseded. missing_ok
+        # absorbs the concurrent-consume race (mind answer deleted it first).
+        if not unreadable:
+            for path, _spid in pending_engine:
+                path.unlink(missing_ok=True)
         return None
 
     def queue_external(self, prompt_text, source="invitation", first_person=None,
@@ -237,14 +268,21 @@ class InboxCognition:
         # relationship layer.
         if from_person is not None:
             payload["from"] = from_person
-        (self.inbox / f"{pid}.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        _atomic_write(self.inbox / f"{pid}.json",
+                      json.dumps(payload, ensure_ascii=False, indent=1))
         return pid
 
     def pending(self) -> list[dict]:
+        # Skip unreadable files rather than raising: a concurrent writer's
+        # half-written file (or any corruption) must not crash the inbox
+        # listing. sync()'s own pass (via _read_payload) still sees the
+        # unreadable file and defers expiry bookkeeping on it — the
+        # no-expiry-on-ambiguous-evidence rule is untouched.
         out = []
         for path in sorted(self.inbox.glob("prompt-*.json")):
-            out.append(json.loads(path.read_text(encoding="utf-8")))
+            payload = _read_payload(path)
+            if payload is not None:
+                out.append(payload)
         return out
 
     def consume(self, pid: str) -> dict:
@@ -252,7 +290,12 @@ class InboxCognition:
         if not path.exists():
             raise ValueError(f"no such pending prompt: {pid}")
         payload = json.loads(path.read_text(encoding="utf-8"))
-        path.unlink()
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            # A concurrent supersede (think()) deleted it between the check
+            # and the unlink: same honest outcome as "already answered".
+            raise ValueError(f"no such pending prompt: {pid}")
         return payload
 
 
