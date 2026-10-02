@@ -133,7 +133,7 @@ def test_sync_empty_inbox_is_noop():
         assert _expect_dict() == {}
         mtime_before = Path(ctx.tmp / "t.db").stat().st_mtime_ns
         out = sync(sub, cli.INBOX)
-        assert out == {"registered": [], "expired": [], "superseded": []}
+        assert out == {"registered": [], "expired": [], "superseded": [], "lapsed": []}
         # mtime must be checked before any helper that constructs a subject
         # (construction itself rewrites the payload row).
         assert Path(ctx.tmp / "t.db").stat().st_mtime_ns == mtime_before, \
@@ -156,7 +156,7 @@ def test_fresh_prompt_not_registered():
         now = _tick()
         _write_prompt("prompt-0007", view_tick=now)  # age 0 < TTL
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": [], "superseded": []}
+        assert out == {"registered": [], "expired": [], "superseded": [], "lapsed": []}
         assert _expect_dict() == {}
 
 
@@ -166,7 +166,7 @@ def test_stale_prompt_registers_exactly_once():
         vt = now - TTL_TICKS - 2
         _write_prompt("prompt-0007", view_tick=vt)
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": ["inbox:prompt-0007"], "expired": [], "superseded": []}
+        assert out == {"registered": ["inbox:prompt-0007"], "expired": [], "superseded": [], "lapsed": []}
         ex = _expectations()["inbox:prompt-0007"]
         assert ex.id == "inbox:prompt-0007"
         assert ex.proposition == (
@@ -179,7 +179,7 @@ def test_stale_prompt_registers_exactly_once():
         assert ex.status == "pending"
         # Resync is idempotent: one prompt, one expectation.
         out2 = sync(cli._subject(), cli.INBOX)
-        assert out2 == {"registered": [], "expired": [], "superseded": []}
+        assert out2 == {"registered": [], "expired": [], "superseded": [], "lapsed": []}
         assert [e for e in _expectations() if e.startswith("inbox:")] == \
             ["inbox:prompt-0007"]
 
@@ -209,7 +209,7 @@ def test_handwritten_without_view_tick_skipped():
             (Path(cli.INBOX) / f"{pid}.json").write_text(
                 json.dumps(payload), encoding="utf-8")
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": [], "superseded": []}
+        assert out == {"registered": [], "expired": [], "superseded": [], "lapsed": []}
         assert _expect_dict() == {}, \
             "a prompt without a real view_tick must never be age-guessed"
 
@@ -219,7 +219,7 @@ def test_corrupt_prompt_file_skipped():
         (Path(cli.INBOX) / "prompt-0011.json").write_text(
             "{not json", encoding="utf-8")
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": [], "superseded": []}
+        assert out == {"registered": [], "expired": [], "superseded": [], "lapsed": []}
         assert _expect_dict() == {}
 
 
@@ -235,7 +235,7 @@ def test_vanished_prompt_marked_expired_still_open():
         # prompt vanished without an answer.
         (Path(cli.INBOX) / "prompt-0007.json").unlink()
         out = sync(cli._subject(), cli.INBOX)
-        assert out == {"registered": [], "expired": ["inbox:prompt-0007"], "superseded": []}
+        assert out == {"registered": [], "expired": ["inbox:prompt-0007"], "superseded": [], "lapsed": []}
         ex = _expectations()["inbox:prompt-0007"]
         assert ex.status == "expired"
         assert ex.resolved_tick is not None
@@ -511,7 +511,7 @@ def test_unresolved_concern_fires_after_due_passes():
     for _ in range(TTL_TICKS + 1):  # tick 4: prompt is stale (age 4 >= 3)
         sub.heartbeat()
     out = sync(sub, inbox)
-    assert out == {"registered": ["inbox:prompt-0001"], "expired": [], "superseded": []}
+    assert out == {"registered": ["inbox:prompt-0001"], "expired": [], "superseded": [], "lapsed": []}
     key = "expectation:inbox:prompt-0001"
     used = _run_until_unresolved(sub, key, 60)
     assert used is not None, \
@@ -543,6 +543,116 @@ def test_no_inbox_trigger_when_inbox_empty():
                     and any("expectation:inbox:" in p
                             for p in trig.get("parents", []))), \
             "unresolved_concern fired for unfinished business that does not exist"
+
+
+# --- lapse: an expired, unclaimable debt is released after its grief window
+#
+# Regression target (2026-10-01): prompt-0090's expectation expired at
+# tick 251 and kept resurfacing "I still owe an answer" forever — the
+# prompt file was gone, no live prompt claimed the debt, and answering
+# was structurally impossible. The guilt deserves its hearing, not a life
+# sentence.
+
+def _expire_unanswered(pid):
+    """Register pid, then vanish it without an answer: expired expectation."""
+    now = _tick()
+    _write_prompt(pid, view_tick=now - TTL_TICKS - 1)
+    sync(cli._subject(), cli.INBOX)
+    (Path(cli.INBOX) / f"{pid}.json").unlink()
+    out = sync(cli._subject(), cli.INBOX)
+    assert _expectations()[expectation_id(pid)].status == "expired"
+    return out
+
+
+def _advance_ticks(n):
+    with redirect_stdout(io.StringIO()):
+        for _ in range(n):
+            cli._run_tick(cli._subject())
+
+
+def test_lapsed_after_grief_window():
+    from calibos_mind.inbox_expectations import GRIEF_TICKS
+    with CliOnTmp():
+        _expire_unanswered("prompt-0021")
+        # Not yet lapsed: inside the grief window the debt still nags.
+        out = sync(cli._subject(), cli.INBOX)
+        assert out["lapsed"] == []
+        assert _expectations()["inbox:prompt-0021"].status == "expired"
+        # One tick short of the window: still expired, still nagging.
+        _advance_ticks(GRIEF_TICKS - 1)
+        assert _expectations()["inbox:prompt-0021"].status == "expired"
+        out = sync(cli._subject(), cli.INBOX)
+        assert out["lapsed"] == []
+        # The window closes: the debt is released (the sync inside the
+        # heartbeat performs the lapse, so assert the settled state).
+        _advance_ticks(1)
+        ex = _expectations()["inbox:prompt-0021"]
+        assert ex.status == "confirmed", ex.status
+        assert ex.outcome == "lapsed", ex.outcome
+        assert ex.resolved_tick is not None
+        # Released from the engine's open set: no more resurfacing.
+        keys = open_link_keys(cli._subject().inspect())
+        assert "expectation:inbox:prompt-0021" not in keys
+
+
+def test_no_lapse_while_prompt_still_live():
+    from calibos_mind.inbox_expectations import GRIEF_TICKS
+    with CliOnTmp():
+        # Prompt file still present but long overdue: the debt is still
+        # settleable by answering, so it never lapses.
+        now = _tick()
+        _write_prompt("prompt-0022", view_tick=now - TTL_TICKS - GRIEF_TICKS - 10)
+        sync(cli._subject(), cli.INBOX)
+        assert _expectations()["inbox:prompt-0022"].status == "pending"
+        _advance_ticks(GRIEF_TICKS + 5)
+        out = sync(cli._subject(), cli.INBOX)
+        assert out["lapsed"] == []
+        # The frozen engine may have expired it past due, but a live prompt
+        # is still answerable: the debt is never released, only kept open.
+        ex = _expectations()["inbox:prompt-0022"]
+        assert ex.status != "confirmed", ex.status
+        assert ex.outcome != "lapsed"
+
+
+def test_no_lapse_when_claimed_by_live_supersedes():
+    from calibos_mind.inbox_expectations import GRIEF_TICKS
+    with CliOnTmp():
+        _expire_unanswered("prompt-0023")
+        # A live prompt claims the debt in its supersedes list: the
+        # consideration evidence exists even though the expiry came first
+        # (the engine expires past-due debts on its own; the supersede
+        # arrives a tick later). Not an engine-minted prompt, so the
+        # heartbeat's queue-time supersede does not eat the claimant.
+        payload = {
+            "id": "prompt-0024",
+            "prompt": "test prompt",
+            "view_tick": _tick() - TTL_TICKS - 1,
+            "view_sequence": 0,
+            "supersedes": ["prompt-0023"],
+            "experiences": [{"source": "invitation",
+                             "first_person": "test invitation"}],
+        }
+        (Path(cli.INBOX) / "prompt-0024.json").write_text(
+            json.dumps(payload), encoding="utf-8")
+        _advance_ticks(GRIEF_TICKS)
+        out = sync(cli._subject(), cli.INBOX)
+        assert out["lapsed"] == []
+        ex = _expectations()["inbox:prompt-0023"]
+        assert ex.status == "confirmed", ex.status
+        assert ex.outcome == "superseded", ex.outcome
+
+
+def test_lapse_is_neutral_on_streak():
+    from calibos_mind.inbox_expectations import GRIEF_TICKS
+    with CliOnTmp():
+        from calibos_mind.inbox_expectations import _policy_path, _read_streak
+        _expire_unanswered("prompt-0025")
+        before = _read_streak(_policy_path(cli.INBOX))
+        _advance_ticks(GRIEF_TICKS)
+        sync(cli._subject(), cli.INBOX)
+        assert _expectations()["inbox:prompt-0025"].outcome == "lapsed"
+        assert _read_streak(_policy_path(cli.INBOX)) == before, \
+            "lapse must not move the expiry streak"
 
 
 def _run_all():

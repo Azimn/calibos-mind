@@ -37,10 +37,11 @@ def validate_thought_text(text: str) -> str:
 
 class CalibosSubject(EndogenousSubject):
     def __init__(self, *args, salience_path=None, interoception_path=None,
-                 familiarity_path=None, **kwargs):
+                 familiarity_path=None, ambivalence_path=None, **kwargs):
         self._salience_path = salience_path
         self._interoception_path = interoception_path
         self._familiarity_path = familiarity_path
+        self._ambivalence_path = ambivalence_path
         self._dreaming = False
         super().__init__(*args, **kwargs)
         # Fresh stores get a stock workspace from __init__; existing stores are
@@ -50,6 +51,7 @@ class CalibosSubject(EndogenousSubject):
         self._attach_salience()
         self._attach_interoception()
         self._attach_familiarity()
+        self._attach_ambivalence()
 
     def _attach_salience(self):
         if self._salience_path is not None:
@@ -77,6 +79,20 @@ class CalibosSubject(EndogenousSubject):
             self.workspace.familiarity_tracker = FamiliarityTracker(
                 self._familiarity_path)
 
+    def _attach_ambivalence(self):
+        # Contested-margin trace markers (see ambivalence.py). The tracker
+        # constructor only reads the sidecar; markers move exclusively via
+        # note()+flush() on the waking-tick path (cli._run_tick). The
+        # observer is (re-)installed on the current engine instance here
+        # because _restore swaps in a fresh engine on every transaction —
+        # install_observer is idempotent, so re-attaching is a no-op when
+        # the instance is already observed.
+        if self._ambivalence_path is not None:
+            from .ambivalence import AmbivalenceTracker, install_observer
+            self.workspace.ambivalence_tracker = AmbivalenceTracker(
+                self._ambivalence_path)
+            install_observer(self)
+
     def _live_open_keys(self) -> set[str]:
         from .unresolved import live_open_keys
         return live_open_keys(self.engine.state, self.continuity.state)
@@ -87,6 +103,7 @@ class CalibosSubject(EndogenousSubject):
         self._attach_salience()
         self._attach_interoception()
         self._attach_familiarity()
+        self._attach_ambivalence()
         self.trigger = {"kind": "none", "parents": [], "depth": 0}
 
     def _add(self, source, text, **metadata):

@@ -41,6 +41,7 @@ DREAMS = BASE / "dreams"
 SALIENCE = BASE / "salience.json"
 INTEROCEPTION = BASE / "interoception.json"
 FAMILIARITY = BASE / "familiarity.json"
+AMBIVALENCE = BASE / "ambivalence.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
@@ -70,7 +71,8 @@ def _subject(provider=None):
     subject = CalibosSubject(DB, cartridge, cognition=provider,
                              salience_path=SALIENCE,
                              interoception_path=INTEROCEPTION,
-                             familiarity_path=FAMILIARITY)
+                             familiarity_path=FAMILIARITY,
+                             ambivalence_path=AMBIVALENCE)
     if isinstance(provider, InboxCognition):
         # Stamp queued prompts with the store tick and record sequence at
         # queue time, so `mind answer` can refuse superseded views.
@@ -125,6 +127,11 @@ def cmd_init(args):
     # no familiarity at all.
     if FAMILIARITY.exists():
         FAMILIARITY.unlink()
+    # Ambivalence trace sidecar (2026-10-01): stale contested-margin
+    # markers must never attach to a reseeded incarnation's ticks (same
+    # bug class as the salience/familiarity resets above).
+    if AMBIVALENCE.exists():
+        AMBIVALENCE.unlink()
     # The confidence-decay policy sidecar must restart too: a streak carried
     # across reseed would penalize a fresh mind's first stale prompt
     # (same bug class as the salience reset above).
@@ -174,6 +181,17 @@ def cmd_note(args):
 def _run_tick(subject):
     before = len(subject.inspect()["trace"])
     result = subject.heartbeat()
+    # Ambivalence traces (2026-10-01): flush any contested-margin markers
+    # the observation wrapper noted during the tick. Waking ticks only —
+    # _run_tick never serves dream ticks (dream_tick() is a separate
+    # path), so dream isolation is untouched. flush() saves only when a
+    # marker was actually noted (no-op write discipline); read-only
+    # commands never tick, so they never write the sidecar. Flushed here,
+    # before sync(), because sync() may open a transaction and _restore
+    # would swap in a fresh tracker with an empty pending buffer.
+    atracker = getattr(subject.workspace, "ambivalence_tracker", None)
+    if atracker is not None:
+        atracker.flush()
     # Inbox-expectation wiring (2026-09-26): stale unanswered prompts become
     # frozen-engine Expectation records so the engine's own temporal /
     # unresolved_concern machinery can resurface them. Waking ticks only —
@@ -237,6 +255,22 @@ def cmd_inbox(args):
     pending = provider.pending()
     if not pending:
         print("inbox empty — nothing waiting for thought.")
+        return 0
+    if getattr(args, "id", None) is not None:
+        # Show one prompt in full: the engine invitation text plus every
+        # experience untruncated. Falls back to a clear miss message rather
+        # than an empty list when the id is wrong or already answered.
+        match = [i for i in pending if i["id"] == args.id]
+        if not match:
+            print(f"no queued prompt {args.id!r} — it may be answered already "
+                  f"or the id may be wrong.")
+            return 1
+        item = match[0]
+        print(f"== {item['id']} ==")
+        print(item.get("prompt", "(no invitation text)"))
+        print(f"-- {len(item['experiences'])} experiences --")
+        for e in item["experiences"]:
+            print(f"  [{e['source']}] {e['first_person']}")
         return 0
     # Mark prompts whose view the store has already moved past: answering
     # them will be refused (refused-stale-view) by design, so flag them here
@@ -807,6 +841,8 @@ def main(argv=None):
     p.set_defaults(func=cmd_heartbeat)
 
     p = sub.add_parser("inbox", help="list prompts waiting for thought")
+    p.add_argument("id", nargs="?", default=None,
+                   help="show one prompt in full instead of the truncated list")
     p.set_defaults(func=cmd_inbox)
 
     p = sub.add_parser("queue", help="queue an externally-authored prompt "

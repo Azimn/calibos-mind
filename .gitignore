@@ -31,3 +31,8 @@ expectation_policy.json
 # boost live in calibos_mind/familiarity.py, which IS tracked; only the
 # per-run streak counts stay private.
 familiarity.json
+# Ambivalence traces (2026-10-01): contested-margin intention markers.
+# Private metacognitive state, local-only like salience.json — the margin
+# rule lives in calibos_mind/ambivalence.py, which IS tracked; only the
+# per-run markers stay private.
+ambivalence.json

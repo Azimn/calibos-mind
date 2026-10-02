@@ -44,6 +44,20 @@ from pathlib import Path
 #: queued one tick ago.
 TTL_TICKS = 3
 
+#: Ticks after an expectation expires before an unclaimable debt is allowed
+#: to lapse (2026-10-01). An expired ``inbox:`` expectation stays in the
+#: engine's open set so the guilt fires — but if the prompt file is gone
+#: and no live prompt claims the debt in its ``supersedes`` list, the
+#: matter can never be settled by answering. The guilt still gets its full
+#: hearing: 12 ticks matches the frozen engine's level-3 temporal grade
+#: ("The wait is becoming prolonged", age > 12 past due), so the nag runs
+#: one complete prolonged cycle before the debt is released. After that the
+#: expectation is confirmed with outcome "lapsed" — the opportunity died
+#: with its object, and a debt that can never be settled should not nag
+#: forever. Neutral on the expiry streak: the failure was already counted
+#: when the expectation expired.
+GRIEF_TICKS = 12
+
 #: Confidence for a registered inbox expectation. It is an obligation we
 #: imposed on ourselves ("I owe an answer"), not a prediction — 0.6 keeps the
 #: engine's urgency math honest without inflating it.
@@ -165,8 +179,20 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
     evidence.
 
     Idempotent: one prompt, one expectation; re-running changes nothing.
-    Returns ``{"registered": [...], "expired": [...], "superseded": [...]}``
-    — explicit lists, never a collapsed zero.
+    Returns ``{"registered": [...], "expired": [...], "superseded": [...],
+    "lapsed": [...]}`` — explicit lists, never a collapsed zero.
+
+    Lapse (2026-10-01): an ``expired`` ``inbox:`` expectation whose prompt
+    is gone and which no live prompt claims in its ``supersedes`` list is
+    an unsettlable debt — the opportunity to answer died with its object.
+    It still nags for ``GRIEF_TICKS`` after expiry (the guilt gets its full
+    hearing, one complete prolonged cycle), then sync confirms it with
+    outcome ``"lapsed"`` so the engine's open set stops resurfacing it.
+    A debt claimed by a live prompt in ``"supersedes"`` is confirmed
+    ``"superseded"`` instead (the consideration evidence exists even
+    though the expiry came first). Expectations whose prompt is still
+    live never lapse. Deferred wholesale while any prompt file is
+    present but unreadable (fail closed), and never touches the streak.
 
     Supersession settlement (2026-09-28): a prompt file replaced by the
     provider's queue-time supersede (the newcomer names it in "supersedes")
@@ -235,7 +261,8 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
     elif not any(eid.startswith(ID_PREFIX) for eid in expectations):
         # Empty inbox, nothing of ours to reconcile: provable no-op. No
         # transaction is opened, so no write path is touched at all.
-        return {"registered": [], "expired": [], "superseded": []}
+        return {"registered": [], "expired": [], "superseded": [],
+                "lapsed": []}
 
     vanished: list[str] = []
     if not unreadable_present:
@@ -268,8 +295,43 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
                 superseded_eids.add(expectation_id(str(sp)))
     vanished_superseded = [eid for eid in vanished if eid in superseded_eids]
     vanished_expired = [eid for eid in vanished if eid not in superseded_eids]
-    if not stale and not vanished:
-        return {"registered": [], "expired": [], "superseded": []}
+    # Lapse (2026-10-01): an expectation already "expired" whose prompt is
+    # gone and which no live prompt claims in its "supersedes" list is an
+    # unsettlable debt — answering it is structurally impossible. It has
+    # had its grief window (GRIEF_TICKS past resolved_tick): confirm it
+    # with outcome "lapsed" so the open set stops resurfacing it. If a
+    # live prompt DOES claim it in "supersedes", the consideration
+    # evidence exists even though the expiry came first (the engine can
+    # expire a debt past due while its file is still standing, and the
+    # supersede arrives a tick later): confirm it "superseded" instead.
+    # A prompt that is still live never lapses. Like expiry, deferred
+    # wholesale on ambiguous evidence (fail closed).
+    lapsed: list[str] = []
+    late_superseded: list[str] = []
+    if not unreadable_present:
+        scan_tick = subject.engine.state.tick
+        for eid, item in expectations.items():
+            if not eid.startswith(ID_PREFIX):
+                continue
+            if item.status != "expired":
+                continue
+            if eid[len(ID_PREFIX):] in live_pids:
+                continue
+            resolved = getattr(item, "resolved_tick", None)
+            # Fail closed: no integer resolved tick means the expiry age is
+            # unknowable — never guess it.
+            if (not isinstance(resolved, int)
+                    or isinstance(resolved, bool)):
+                continue
+            if scan_tick - resolved < GRIEF_TICKS:
+                continue
+            if eid in superseded_eids:
+                late_superseded.append(eid)
+            else:
+                lapsed.append(eid)
+    if not stale and not vanished and not lapsed and not late_superseded:
+        return {"registered": [], "expired": [], "superseded": [],
+                "lapsed": []}
 
     with subject._transaction():
         now = subject.engine.state.tick
@@ -315,13 +377,46 @@ def sync(subject, inbox_dir, ttl_ticks: int = TTL_TICKS) -> dict:
                     0.0, min(1.0, 1.0 - item.confidence))
                 item.resolved_tick = now
                 superseded_closed.append(eid)
+        lapsed_closed: list[str] = []
+        for eid in lapsed:
+            item = subject.continuity.state.expectations.get(eid)
+            if item is not None and item.status == "expired":
+                # The debt outlived its object and has had its grief
+                # window: confirm (settled) with outcome "lapsed", the
+                # same confirmed shape as supersession — status, outcome,
+                # and resolved tick are the honest audit trail. Neutral on
+                # the streak: the expiry already counted the failure, and
+                # lapse is a release, not a settlement. These are
+                # obligations, not predictions, so no resolve_expectation
+                # insight prose is written.
+                item.status = "confirmed"
+                item.outcome = "lapsed"
+                item.prediction_error = max(
+                    0.0, min(1.0, 1.0 - item.confidence))
+                item.resolved_tick = now
+                lapsed_closed.append(eid)
+        for eid in late_superseded:
+            item = subject.continuity.state.expectations.get(eid)
+            if item is not None and item.status == "expired":
+                # Late consideration: the expiry came first (engine
+                # expires past-due debts on its own), but a live prompt
+                # claims the debt was considered and closed by a newer
+                # view. The evidence of consideration exists, so the
+                # honest outcome is "superseded", not "lapsed". Neutral
+                # on the streak, like the pending-path settlement.
+                item.status = "confirmed"
+                item.outcome = "superseded"
+                item.prediction_error = max(
+                    0.0, min(1.0, 1.0 - item.confidence))
+                item.resolved_tick = now
+                superseded_closed.append(eid)
     if expired:
         # The streak counts failures: one per expectation that expired
         # unanswered in this sync. Written once, only when it changed.
         streak += len(expired)
         _write_streak(policy_path, streak)
     return {"registered": registered, "expired": expired,
-            "superseded": superseded_closed}
+            "superseded": superseded_closed, "lapsed": lapsed_closed}
 
 
 def resolve(subject, pid: str, *, outcome: str, inbox_dir=None):

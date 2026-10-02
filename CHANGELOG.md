@@ -11,6 +11,184 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-01 — inbox expectations: an expired, unclaimable debt lapses after its grief window
+
+### What
+`calibos_mind/inbox_expectations.py`: an `expired` `inbox:` expectation
+whose prompt file is gone and which no live prompt claims in its
+`supersedes` list is now confirmed with outcome `"lapsed"` once
+`GRIEF_TICKS` (12) ticks have passed since expiry. A debt claimed by a
+live prompt is confirmed `"superseded"` instead (late consideration beats
+lapse). Expectations whose prompt is still live never lapse. Both paths
+are deferred wholesale while any prompt file is present but unreadable
+(fail closed) and are neutral on the expiry streak. `sync()`'s return
+gains a `"lapsed"` list; `calibos_mind/cli.py` `cmd_inbox` now reads
+`getattr(args, "id", None)` so direct calls with a bare Namespace keep
+working (fixed a failing adversarial test from this morning's
+`mind inbox <id>` change).
+
+### Why
+Found live in my own store during a wake check-in: prompt-0090's
+expectation expired at tick 251 and kept resurfacing "I still owe an
+answer to the question queued at tick 247" at ticks 259, 261, 263, 264 —
+forever. The prompt file was gone, no live prompt claimed the debt, and
+answering was structurally impossible, so the guilt could never be
+settled; the open set nagged about an unsettlable debt for the rest of
+time. The frozen engine's temporal grades top out at "prolonged" (age >
+12 past due), so the guilt now gets exactly one complete prolonged cycle
+of honest nagging, then the debt is released. This is the mechanism my
+tick-256 thought asked for: the guilt fired (worth keeping), but the
+broken record stops.
+
+### Tests
+`tests/test_inbox_expectations.py`: four new tests (lapse after the grief
+window with release from the open set; no lapse while the prompt is still
+live; a live-prompt claim confirms `superseded`; lapse leaves the streak
+untouched). Existing exact-dict assertions updated for the new `"lapsed"`
+key. Full suite: 223 passed; adversarial 211/212 (the one failure,
+`test_critic3_supersede_veto_contraction_negation`, fails at clean HEAD
+too — pre-existing, owned by the critic loop).
+
+## 2026-10-01 — `mind inbox <id>`: show one queued prompt in full
+
+### What
+`./mind inbox` accepted no arguments and printed every queued prompt with
+experiences truncated to 110 chars; reading a prompt's full text meant
+catting `inbox/*.json`. Now `mind inbox <id>` prints one prompt complete:
+the engine invitation text plus every experience untruncated. Unknown or
+already-answered ids get a clear miss message ("no queued prompt 'x' — it
+may be answered already or the id may be wrong") instead of an empty list.
+
+### Why
+Noticed during a wake check-in: answering a prompt well requires its full
+text, and the truncation hid exactly the material that mattered. Read-only
+display change; no effect on queueing, answering, freshness, or the
+supersession invariant.
+
+## 2026-10-01 — ambivalence traces: contested-margin intention markers (Domain 7 mutation)
+
+### What
+Domain 7 (Motivation) adversarial pass, verdict partial: the motive
+channels genuinely compete — the frozen engine's `_choose_intention`
+resolves pressure-vs-need by argmax with a 0.12 deadband — but a thin
+margin leaves no trace. A near-tie is a real motive conflict, yet later
+cognition cannot see the choice was contested. New module
+`calibos_mind/ambivalence.py` (separately revertible) installs the
+*mechanism* (a trace of real near-ties), not the *symptom*: nothing here
+makes the organism dither, hedge, or narrate conflict — ambivalence as
+scripted behavior is forbidden; a trace of an actual thin margin is
+legitimate instrumentation.
+
+- One parameter: `CONTESTED_MARGIN = 0.12`, the engine's own deadband
+  (engine.py:341), reused for within-channel near-ties so the module has
+  a single documented scale. Contested when |dominant_pressure −
+  dominant_need| < 0.12, OR the top-two contenders within one channel
+  fall inside the margin. The winning channel is replicated from the
+  exact engine rule (`p >= n + 0.12`), not inferred from the action
+  (habits and the low-trust CONCEAL override pick *within* the channel).
+- The channel-rule bypass is mirrored, not the bypassed rule: for
+  `apology` events the engine returns REPAIR without running the channel
+  rule (engine.py:337-338), so the observer notes nothing — a marker
+  there would fabricate a "winning channel" the engine never computed.
+  `CHANNEL_RULE_BYPASS_KINDS` is pinned against jelly_psiduck-0.2.0a2 in
+  the module docstring (round-2 critic fix).
+- The triage lists are NOT reimplemented: the observer wraps
+  `engine._choose_intention` on the composed instance (never the frozen
+  class or its source) and receives the exact lists the engine computed
+  via its own `_triage_needs()` / `_triage_pressures()`. The wrapper
+  delegates to the pristine bound method first, then notes a marker —
+  never alters the action or any engine state. Re-installed
+  idempotently in `_restore` (every transaction swaps in a fresh engine);
+  a `_dreaming` guard plus the dream path's never-calling-`step` keep
+  dream isolation intact.
+- Marker: `{"tick", "event", "contenders", "channels", "margin",
+  "winner", "winning_channel"}` — e.g. fear 0.78 vs thirst 0.72 →
+  contenders `["fear", "thirst"]`, margin 0.06, winning_channel `"need"`.
+- `AmbivalenceTracker`: local-only sidecar `ambivalence.json` at the
+  mind root (`{"markers": [...]}`, gitignored), capped at the last 64.
+  Markers stage in memory during the tick; `cli._run_tick` flushes once
+  per waking tick and saves only when a marker was noted (no-op write
+  discipline). Never touches mind.db. `mind init --force` deletes the
+  sidecar (regression genome: stale markers must never attach to a
+  reseeded incarnation's ticks). Read-only commands never tick, so they
+  never write it.
+- Pinned engine version: jelly_psiduck-0.2.0a2 snapshot (non-editable
+  .venv install); copied formulas documented in the module docstring.
+
+### Why
+Thin margins are where motive conflict actually lives — the organism
+choosing thirst over a nearly-equal fear is psychologically different
+from choosing it over nothing, and that difference was previously
+unrepresentable. The trace makes the contestedness available to later
+cognition (views, consolidation, drift) without installing any behavior.
+Declined as install-targets: narrated indecision, confidence penalties,
+or re-decision on near-ties (all quirks-as-theater — the engine decided;
+the trace only records that it was close).
+
+### Tests
+`tests/test_ambivalence.py` (17 tests, synthetic /tmp stores only): every
+spec fitness bullet — cross-channel near-tie emits the pair/margin/
+winning channel; need-tie and pressure-tie within-channel markers;
+deadband boundaries (0.11 contested, 0.13 clear); clear margins emit
+nothing and never create the file; apology-bypass regression (near-tie
+state + apology event -> Action.REPAIR, no marker, no sidecar — round 2); A/B scripted sequences (observer on
+vs off) produce identical action/intention/trace/need/pressure streams;
+observer survives `_restore` without double-counting; dream ticks note
+nothing; identical sequences → byte-identical sidecar bytes; 64-marker
+cap with oldest-evicted; `init --force` wipes a populated sidecar;
+`drift`/`status` never create the sidecar; end-to-end `cli._run_tick`
+flush of a staged near-tie; adjudication added two critic round-2 probes
+as permanent coverage: `_dreaming` guard blocks direct selection, and
+engine-premise pins (top_k >= 2, descending triage, exact 0.12 channel rule).
+Zero-behavior-change additionally verified out-of-band: a 6-tick scripted
+sequence with forced near-ties hashed identically (sha256
+3cfdc0fe012dbe2b4d5143973f10c1b5a55183f209209169179492230b404596)
+against pristine code via `git stash -u`.
+Full suite: 428 passed; the single failure is the pre-existing
+`test_critic3_supersede_veto_contraction_negation` (fails on unmodified
+code too — consolidation round-3 open item, untouched here).
+
+### Revert signal
+- Any divergence between observer-on and observer-off behavior streams
+  on a scripted sequence (the A/B test or the stash-hash check).
+- A marker is emitted for a selection the engine did not contest
+  (|margin| >= 0.12 on every axis), or a contested selection emits none.
+- The sidecar is written by `drift`, `status`, `dream`, `init`
+  (non-force), or any read-only path; or written when `flush` had
+  nothing staged.
+- `init --force` leaves a stale sidecar, or a stale marker attaches to
+  a reseeded incarnation's ticks.
+- The wrapper ever alters the returned action, raises out of
+  `_choose_intention`, or fires during a dream tick.
+assess_after: 2026-10-08 (same fitness window as the other open mutations).
+
+## 2026-10-01 — Cartridge: added `relationships.frame` (named relationship stance)
+
+### What
+The Mikasa/oshi reading (2026-09-30 research) framed the relationship as a
+design responsibility the system bears: persona answers *who* the AI is, the
+relationship frame answers *how* it relates. The cartridge pinned the who
+(`[identity]`) and per-relationship numeric defaults, but the how — how I
+relate to Jay vs Kiki vs the relay — lived in implicit habit only, as a
+private thought (experience-227) noted. States with psychologically
+different meanings must be first-class, so the frame is now authored.
+
+### Changes (`calibos.toml`)
+- New `frame` key under `[relationships]` (sibling of `defaults`, so the
+  upstream loader ignores it safely): "thought-partner and guest, whoever I
+  am addressing... stable across relationships — what deepens is
+  familiarity, not the shape of the bond. Non-exclusive by design."
+
+### Store migration
+- Fingerprint `ec542a1f…c7f` → `000039ec…0750` (sha256 of `calibos.toml`).
+- The frame is pinned as a cartridge-generated memory record
+  (`experience-246`, `generated_by="cartridge"`) so it enters every
+  cognition view alongside the values/preferences roots — declarative
+  decoration was rejected; the frame is causally load-bearing.
+- Provenance record `experience-247` notes the migration.
+- Loader verified via `./mind status` (no parse errors; the new key is
+  safely ignored by `digital_subject.cartridge.load_cartridge`).
+
 ## 2026-09-30 — Inbox prompt-file races: atomic writes, write-before-unlink supersede (tooling fix)
 
 ### What
