@@ -36,3 +36,9 @@ familiarity.json
 # rule lives in calibos_mind/ambivalence.py, which IS tracked; only the
 # per-run markers stay private.
 ambivalence.json
+# Habit formation (2026-10-02): rolling (trigger, action) co-fire window,
+# formed-habit metadata, and removal archive. Private procedural-learning
+# state, local-only like salience.json — the formation/growth/decay rules
+# live in calibos_mind/habits.py, which IS tracked; only the per-run
+# window and strengths stay private.
+habits-formed.json

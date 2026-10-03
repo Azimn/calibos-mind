@@ -11,6 +11,134 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-02 — habit formation: conduct chasing, not conduct authoring
+
+### What
+New `calibos_mind/habits.py`: a `HabitFormationTracker` that lets habits
+EMERGE from repeated conduct instead of being authored. The frozen engine
+already fires cartridge habits inside the chosen intention channel at
+strength >= 0.65, but strength was a fixed constant and the set was closed
+at two authored entries. Now a local-only sidecar (`habits-formed.json`,
+gitignored) keeps a rolling 8-tick window of (trigger, action) co-fires;
+>= 3 co-fires with a non-worsening trigger-need delta crystallizes a real
+`digital_subject.models.Habit` (`formed:<trigger>:<action>`, strength 0.45,
+cooldown 2) into `engine.state.habits` via the normal transaction payload
+path — the wrapper owns state, the engine just fires what it finds.
+Growth +0.02/co-fire capped at 0.70 (deliberately below the strongest
+authored habit 0.72: formed habits modulate, authored habits define
+identity); disuse decay -0.05/tick when the trigger dominates but another
+action is chosen; below 0.30 the habit is removed with a written archival
+note (key, peak, lifespan, reason) — history archived, never silently
+deleted. The trigger is observed by a pure wrapper on the engine
+instance's `select_conduct` (one call per waking tick, never on the dream
+path), replicating the engine's own channel rule; the apology bypass is
+mirrored (no channel selection ran, so nothing is noted). Wired through
+`CalibosSubject(habits_path=...)`, `cli._subject()`, and `cli._run_tick`
+(waking ticks only); `mind init --force` wipes the sidecar; read-only
+commands never touch it. 22 tests in `tests/test_habits.py`, all on
+synthetic /tmp stores.
+
+### Why
+Articles of Artificiality, Domain 8 (Habits and procedural continuity):
+the diagnostic gaps are "Repetition does not make behavior more
+automatic" and "No bad habits". This installs a formation MECHANISM, not
+a habit — habits themselves emerge from lived repetition, and a formed
+habit can conflict with goals (pure repetition-based formation), which
+the taxonomy lists as a symptom of authenticity, not a bug. The
+deliberated→automatic shift is real: at >= 0.65 the engine's existing
+within-channel fire rule applies, observably bypassing the deliberated
+alternative (proven: withdraw chosen where deliberation would say
+conceal, with a twin control). A missed formation is safe; a phantom
+habit is the hazard — hence the delta gate, the apology-bypass mirror,
+and the consume-or-drop pending slot.
+
+### Round-1 critic fix (2026-10-02): corrupt sidecar fails loud, writes atomic
+
+The critic's `test_corrupt_sidecar_never_silently_deletes_habits` caught
+a silent-zero genome-class bug: `HabitFormationTracker.__init__` swallowed
+`ValueError`/`OSError` on a malformed sidecar and silently adopted empty
+state, and the next crystallization's `reconcile_state_habits()` then
+deleted every `formed:*` key from `state.habits` with no archival note —
+inventing a second, silent removal path beside the spec's only sanctioned
+one (decay below 0.30 + written note). Fixes in `calibos_mind/habits.py`:
+(1) `save()` is now atomic (temp file + `os.replace` + fsync in the same
+directory) so a crash mid-write leaves the old or the new body, never a
+truncated shell; (2) the load contract is fail-loud — a missing file is a
+legitimate fresh start, but a present-but-unparseable file, a wrong
+top-level shape, or any malformed `formed` entry (key not `formed:`-prefixed,
+action not a real `Action`, non-finite strength/peak, non-int ticks)
+raises `ValueError`. Chosen over a degraded flag because a flag would fork
+every downstream path and let the mind run on fabricated continuity; a
+present-but-unreadable sidecar, with writes now atomic, is anomalous
+enough to halt (the raise surfaces in `_restore` before any reconcile
+runs), matching the codebase's established fail-loud philosophy
+(sleep.py isolation assertions; `load_records` raising on malformed
+state). (3) Dead `reset()` removed — nothing called it; `mind init
+--force` unlinks the sidecar directly, like familiarity/ambivalence.
+7 new regression tests in `tests/test_habits.py` (corrupt/truncated,
+wrong-shape, malformed-entry variants, end-to-end tick-raises-before-
+reconcile, atomic-save guarantees); full suite 463 passed + the 1
+pre-existing unrelated consolidate-r3 failure.
+
+### Round-2 critic fix (2026-10-02): window rows validated at load, formed entries confined to the written domain, `init --force` recovers from a corrupt sidecar
+
+The critic's round-2 attack file (`critic-habits-r2.py`, Part B, 11 red
+tests) found three gaps in the round-2 contract:
+
+**F1 — window filter kept rows that crash every waking tick.** `__init__`
+kept any dict in `window`, but `observe_tick` indexes `e["trigger"]` /
+`e["delta"]` unconditionally — a row like `{"tick": 1}` KeyErrors on
+every waking tick, a string `delta` TypeErrors the mean-delta sum. Fix in
+`calibos_mind/habits.py`: a `_valid_window_row` check at load drops rows
+missing `tick`/`trigger`/`action`/`dominant_need`/`delta` or holding
+wrong-typed ones (non-bool int tick, non-empty string fields, finite
+non-bool delta). The filter's own rationale stands: a dropped row only
+misses a future formation — the safe direction — but a *kept* row must be
+sound.
+
+**F2 — parseable formed entries could mint a super-habit.** `_finite_number`
+accepted `999.0`, `True` (bool is an int subclass — a `strength: true`
+would fire, `True >= 0.65`), and `-0.5`; negative ticks, `last_tick <
+created_tick`, and key/meta trigger mismatches all loaded clean, and
+`reconcile_state_habits` projected them unclamped — the critic
+demonstrated a `strength=999.0` `formed:curiosity:explore` outranking
+authored `curious_question` (0.72) via the engine's max-strength
+`_matching_habit` rule. Fix: `_finite_number` now rejects bools; formed
+entries must have `strength` in `[REMOVAL_FLOOR, GROWTH_CAP]` (0.30–0.70,
+the tracker's actual written domain), `peak` in `[strength, GROWTH_CAP]`,
+non-negative non-bool int ticks with `last_tick >= created_tick`, and a
+key that names exactly `formed:<trigger>:<action>`. Anything else raises
+at load — a phantom file can never reach reconcile, so it can never
+outrank an authored identity habit.
+
+**F3 — `init --force` couldn't recover from a corrupt sidecar.**
+`cmd_init` constructed the subject (raising `ValueError` on the corrupt
+file) *before* reaching the sidecar wipes, so fail-loud left the mind
+bricked until manual deletion. Fix in `calibos_mind/cli.py`: the
+familiarity/ambivalence/habits/expectation-policy sidecar wipes now run
+*before* `subject = _subject()` (on a fresh init the guards are no-ops).
+The salience/interoception `.reset()` calls stay after construction.
+
+Noted follow-up (out of scope for this loop, per the critic): a corrupt
+`salience.json` bricks `--force` the same way via
+`SalienceTracker(SALIENCE).reset()`, and a corrupt
+`interoception.json` likewise via `InteroceptionTracker(INTEROCEPTION)`
+construction. `--force` is meant to be the sanctioned recovery path for
+exactly these cases; a future pass should either unlink
+salience/interoception before subject construction too, or make their
+resets tolerant of corrupt files on the reseed path only.
+
+10 new regression tests (9 in `tests/test_habits.py`, 1 `--force`
+recovery test in `tests/test_init.py`); all on synthetic /tmp stores —
+live `mind.db`/`salience.json`/`interoception.json` checksums verified
+unchanged before and after the runs. Full suite: 473 passed + the 1
+pre-existing unrelated consolidate-r3 failure. The critic's
+`test_phantom_super_habit_cannot_outrank_authored` needs a wrap of the
+constructor in `pytest.raises` on re-verification: it assumed the phantom
+file *loads*, which the demanded F2 fix now forbids — the invariant it
+tests (no formed habit outranks authored) holds by construction, since
+the malformed file is rejected before reconcile can run.
+
 ## 2026-10-01 — inbox expectations: an expired, unclaimable debt lapses after its grief window
 
 ### What
@@ -2086,3 +2214,17 @@ pre-existing, unrelated `test_critic3_supersede_veto_contraction_negation`
   untouched as out of scope; the stash line there is belt-and-braces.
 - `InboxCognition.think` prompt payloads are unchanged (no `record_id`) —
   rehearsal only consumes dream logs, so inbox prompts are out of scope.
+
+### Design-lead test-hygiene fix (2026-10-02, post-loop adjudication)
+`tests/test_ambivalence.py` and `tests/test_interoception.py` `_patched_cli` helpers left
+sidecar paths (SALIENCE/INTEROCEPTION/FAMILIARITY/PROPOSALS/ARCHIVE, and INBOX in one)
+pointed at the live checkout, so `cmd_init` in those suites reset/wiped LIVE
+`salience.json`/`interoception.json` during routine suite runs (incident: live sidecars
+wiped ~09:08 and ~09:28 CDT; `mind.db`, inbox, dreams untouched; lived salience/importance
+and felt-state history lost — recoverable only from Jay's 04:21 continuity-vault snapshot,
+his key required). Both helpers now redirect the complete nine-path tuple mirroring
+`tests/test_init.py` (DB, INBOX, SALIENCE, INTEROCEPTION, FAMILIARITY, AMBIVALENCE, HABITS,
+PROPOSALS, ARCHIVE). Verified: critic's redirect tests green; full suite 473 passed + 1
+pre-existing failure with live-file md5s byte-identical before/after. Noted follow-up: a
+conftest-level fixture auto-redirecting every sidecar path for any test touching `cli`
+would make this bug class structurally impossible; the regression genome now covers it.

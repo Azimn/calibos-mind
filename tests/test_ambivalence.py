@@ -334,13 +334,29 @@ def test_sidecar_capped():
 # -- genome: reseed reset, read-only discipline --------------------------------
 
 def _patched_cli(tmp: Path):
-    """Point the CLI at synthetic paths, including the ambivalence sidecar."""
+    """Point the CLI at synthetic paths, including the ambivalence sidecar.
+
+    Redirects the complete module-level path set cmd_init touches (2026-10-02):
+    a helper that leaves SALIENCE/INTEROCEPTION/FAMILIARITY/PROPOSALS/ARCHIVE
+    pointed at the live checkout lets cmd_init reset or wipe live mind state.
+    Mirrors tests/test_init.py's nine-path tuple.
+    """
     db = tmp / "mind.db"
     inbox = tmp / "inbox"
     inbox.mkdir(exist_ok=True)
+    salience = tmp / "salience.json"
+    interoception = tmp / "interoception.json"
+    familiarity = tmp / "familiarity.json"
     ambivalence = tmp / "ambivalence.json"
-    saved = (cli.DB, cli.INBOX, cli.AMBIVALENCE, cli._subject)
-    cli.DB, cli.INBOX, cli.AMBIVALENCE = db, inbox, ambivalence
+    habits = tmp / "habits-formed.json"
+    proposals = tmp / "proposals"
+    archive = tmp / "archive"
+    saved = (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
+             cli.AMBIVALENCE, cli.HABITS, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
+    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.AMBIVALENCE, \
+        cli.HABITS, cli.PROPOSALS, cli.ARCHIVE = (
+            db, inbox, salience, interoception, familiarity, ambivalence,
+            habits, proposals, archive)
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -357,7 +373,8 @@ def _patched_cli(tmp: Path):
 
 
 def _restore_cli(saved):
-    cli.DB, cli.INBOX, cli.AMBIVALENCE, cli._subject = saved
+    (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
+     cli.AMBIVALENCE, cli.HABITS, cli.PROPOSALS, cli.ARCHIVE, cli._subject) = saved
 
 
 def test_init_force_wipes_sidecar():

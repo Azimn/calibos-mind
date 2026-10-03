@@ -40,14 +40,18 @@ def _patched_cli(tmp: Path):
     db = tmp / "mind.db"
     salience = tmp / "salience.json"
     interoception = tmp / "interoception.json"
+    familiarity = tmp / "familiarity.json"
     ambivalence = tmp / "ambivalence.json"
+    habits = tmp / "habits-formed.json"
     inbox = tmp / "inbox"
     proposals = tmp / "proposals"
     archive = tmp / "archive"
-    saved = (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.AMBIVALENCE,
-             cli.PROPOSALS, cli.ARCHIVE, cli._subject)
-    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.AMBIVALENCE, cli.PROPOSALS, \
-        cli.ARCHIVE = (db, inbox, salience, interoception, ambivalence, proposals, archive)
+    saved = (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
+             cli.AMBIVALENCE, cli.HABITS, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
+    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.AMBIVALENCE, \
+        cli.HABITS, cli.PROPOSALS, cli.ARCHIVE = (
+            db, inbox, salience, interoception, familiarity, ambivalence,
+            habits, proposals, archive)
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -62,8 +66,58 @@ def _patched_cli(tmp: Path):
 
 
 def _restore(saved):
-    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.AMBIVALENCE, cli.PROPOSALS, \
-        cli.ARCHIVE, cli._subject = saved
+    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.AMBIVALENCE, \
+        cli.HABITS, cli.PROPOSALS, cli.ARCHIVE, cli._subject = saved
+
+
+def _patched_cli_with_habits(tmp: Path):
+    """_patched_cli plus habits/familiarity/ambivalence wiring on the
+    subject. The F3 recovery path only engages when _subject() actually
+    reads the habits sidecar — a corrupt file must raise inside
+    _subject() without the fix, so the plain _patched_cli subject (no
+    habits_path) would never exercise the failure."""
+    make_subject, saved = _patched_cli(tmp)
+    db = tmp / "mind.db"
+    inbox = tmp / "inbox"
+    inbox.mkdir(exist_ok=True)
+    cartridge = load_cartridge(cli.CARTRIDGE_PATH)
+
+    def make_subject_with_habits(provider=None):
+        if provider is None:
+            provider = InboxCognition(inbox)
+        return CalibosSubject(
+            str(db), cartridge, cognition=provider,
+            salience_path=str(tmp / "salience.json"),
+            interoception_path=str(tmp / "interoception.json"),
+            familiarity_path=str(tmp / "familiarity.json"),
+            ambivalence_path=str(tmp / "ambivalence.json"),
+            habits_path=str(tmp / "habits-formed.json"))
+    cli._subject = make_subject_with_habits
+    return make_subject_with_habits, saved
+
+
+def test_init_force_recovers_from_corrupt_habits_sidecar():
+    """F3 (round-2 critic): fail-loud is only acceptable with a sanctioned
+    recovery path. cmd_init --force unlinks the sidecars BEFORE
+    constructing the subject, so a corrupt habits-formed.json is wiped
+    rather than bricking _subject() — the mind reseeds with authored
+    habits only."""
+    tmp = Path(tempfile.mkdtemp(prefix="init-force-habits-"))
+    make_subject, saved = _patched_cli_with_habits(tmp)
+    try:
+        assert cli.cmd_init(_args(force=False)) == 0
+        habits = tmp / "habits-formed.json"
+        habits.write_text('{"window": [{"tick": 1,', encoding="utf-8")
+        assert cli.cmd_init(_args(force=True)) == 0
+        assert not habits.exists(), \
+            "init --force must wipe the corrupt sidecar"
+        fresh = make_subject()
+        assert {k for k in fresh.engine.state.habits
+                if k.startswith("formed:")} == set()
+        assert set(fresh.engine.state.habits) == {
+            "curious_question", "verify_before_claiming"}
+    finally:
+        _restore(saved)
 
 
 def _args(force):
@@ -168,7 +222,8 @@ def test_fixture_redirects_all_sidecar_paths():
 def _main():
     for fn in (test_single_definition, test_force_resets_sidecar_and_restarts_ids,
                test_no_force_refuses_existing,
-               test_fixture_redirects_all_sidecar_paths):
+               test_fixture_redirects_all_sidecar_paths,
+               test_init_force_recovers_from_corrupt_habits_sidecar):
         fn()
         print(f"PASS {fn.__name__}")
     print("all init tests passed")

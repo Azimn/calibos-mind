@@ -299,13 +299,19 @@ def _patched_cli(tmp: Path):
     db = tmp / "mind.db"
     intero = tmp / "interoception.json"
     salience = tmp / "salience.json"
+    familiarity = tmp / "familiarity.json"
+    habits = tmp / "habits-formed.json"
     inbox = tmp / "inbox"
+    inbox.mkdir(exist_ok=True)
     proposals = tmp / "proposals"
     archive = tmp / "archive"
-    saved = (cli.DB, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS,
-             cli.ARCHIVE, cli._subject)
-    cli.DB, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS, cli.ARCHIVE = (
-        db, salience, intero, proposals, archive)
+    ambivalence = tmp / "ambivalence.json"
+    saved = (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
+             cli.HABITS, cli.AMBIVALENCE, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
+    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.HABITS, \
+        cli.AMBIVALENCE, cli.PROPOSALS, cli.ARCHIVE = (
+            db, inbox, salience, intero, familiarity, habits,
+            ambivalence, proposals, archive)
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -320,8 +326,8 @@ def _patched_cli(tmp: Path):
 
 
 def _restore(saved):
-    (cli.DB, cli.SALIENCE, cli.INTEROCEPTION, cli.PROPOSALS,
-     cli.ARCHIVE, cli._subject) = saved
+    (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.HABITS,
+     cli.AMBIVALENCE, cli.PROPOSALS, cli.ARCHIVE, cli._subject) = saved
 
 
 def _stdout(fn, *args):

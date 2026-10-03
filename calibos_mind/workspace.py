@@ -207,6 +207,9 @@ class CalibosWorkspace(SubjectiveWorkspace):
     # Attached by CalibosSubject when an interoception sidecar path is
     # configured. None -> interoception records pass through untouched.
     interoception_tracker = None
+    # Attached by CalibosSubject when a habits sidecar path is configured.
+    # None -> no habit formation tracking (plain engine behavior).
+    habits_tracker = None
 
     def _view_experience(self, r):
         """FeltExperience for a record, with the interoceptive-gap substitution.

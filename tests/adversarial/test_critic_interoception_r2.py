@@ -87,6 +87,8 @@ class CliOnTmpRealWiring:
             "DREAMS": tmp / "dreams",
             "SALIENCE": tmp / "salience.json",
             "INTEROCEPTION": tmp / "interoception.json",
+            "HABITS": tmp / "habits-formed.json",
+            "AMBIVALENCE": tmp / "ambivalence.json",
             "PROPOSALS": tmp / "proposals",
             "ARCHIVE": tmp / "archive",
         }

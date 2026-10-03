@@ -42,6 +42,7 @@ SALIENCE = BASE / "salience.json"
 INTEROCEPTION = BASE / "interoception.json"
 FAMILIARITY = BASE / "familiarity.json"
 AMBIVALENCE = BASE / "ambivalence.json"
+HABITS = BASE / "habits-formed.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
@@ -72,7 +73,8 @@ def _subject(provider=None):
                              salience_path=SALIENCE,
                              interoception_path=INTEROCEPTION,
                              familiarity_path=FAMILIARITY,
-                             ambivalence_path=AMBIVALENCE)
+                             ambivalence_path=AMBIVALENCE,
+                             habits_path=HABITS)
     if isinstance(provider, InboxCognition):
         # Stamp queued prompts with the store tick and record sequence at
         # queue time, so `mind answer` can refuse superseded views.
@@ -110,6 +112,42 @@ def cmd_init(args):
         return 1
     if args.force and DB.exists():
         DB.unlink()
+    # Wipe tracker sidecars BEFORE constructing the subject (2026-10-02):
+    # the trackers fail loud on corrupt sidecars, so a corrupt file
+    # raises inside _subject() and the wipe below would never run —
+    # leaving the mind bricked until manual deletion. A reseed starts
+    # with no tracker history at all, so wiping first is the correct
+    # order; on a fresh (non-force) init these files don't exist and the
+    # guards are no-ops. The salience/interoception resets stay after
+    # construction (their .reset() rewrites rather than unlinks; a
+    # corrupt salience.json still bricks --force the same way — noted
+    # follow-up in the CHANGELOG).
+    # Familiarity streaks (2026-09-28): stale near-miss streaks must never
+    # attach to recycled ids after reseed (same bug class as the salience
+    # reset). The sidecar is deleted, not reset: a reseed starts with
+    # no familiarity at all.
+    if FAMILIARITY.exists():
+        FAMILIARITY.unlink()
+    # Ambivalence trace sidecar (2026-10-01): stale contested-margin
+    # markers must never attach to a reseeded incarnation's ticks (same
+    # bug class as the salience/familiarity resets above).
+    if AMBIVALENCE.exists():
+        AMBIVALENCE.unlink()
+    # Habit formation sidecar (2026-10-02): stale formation windows and
+    # formed-habit records must never attach to a reseeded incarnation's
+    # ticks (same bug class as the salience/familiarity resets above).
+    # Formed habits leave state.habits with the DB itself, which is
+    # deleted above — the fresh cartridge seed restores authored habits
+    # only.
+    if HABITS.exists():
+        HABITS.unlink()
+    # The confidence-decay policy sidecar must restart too: a streak carried
+    # across reseed would penalize a fresh mind's first stale prompt
+    # (same bug class as the salience reset above).
+    from .inbox_expectations import POLICY_FILE_NAME
+    expectation_policy = INBOX.parent / POLICY_FILE_NAME
+    if expectation_policy.exists():
+        expectation_policy.unlink()
     subject = _subject()
     with subject._transaction():
         for text, concept_pair in SEED_MEMORIES:
@@ -121,24 +159,6 @@ def cmd_init(args):
     SalienceTracker(SALIENCE).reset()
     from .interoception import InteroceptionTracker
     InteroceptionTracker(INTEROCEPTION).reset()
-    # Familiarity streaks (2026-09-28): stale near-miss streaks must never
-    # attach to recycled ids after reseed (same bug class as the salience
-    # reset above). The sidecar is deleted, not reset: a reseed starts with
-    # no familiarity at all.
-    if FAMILIARITY.exists():
-        FAMILIARITY.unlink()
-    # Ambivalence trace sidecar (2026-10-01): stale contested-margin
-    # markers must never attach to a reseeded incarnation's ticks (same
-    # bug class as the salience/familiarity resets above).
-    if AMBIVALENCE.exists():
-        AMBIVALENCE.unlink()
-    # The confidence-decay policy sidecar must restart too: a streak carried
-    # across reseed would penalize a fresh mind's first stale prompt
-    # (same bug class as the salience reset above).
-    from .inbox_expectations import POLICY_FILE_NAME
-    expectation_policy = INBOX.parent / POLICY_FILE_NAME
-    if expectation_policy.exists():
-        expectation_policy.unlink()
     if PROPOSALS.exists():
         for child in PROPOSALS.iterdir():
             if child.is_file():
@@ -180,7 +200,40 @@ def cmd_note(args):
 
 def _run_tick(subject):
     before = len(subject.inspect()["trace"])
+    needs_before = dict(subject.engine.state.needs)
     result = subject.heartbeat()
+    # Habit formation (2026-10-02): conduct chasing. The select_conduct
+    # observer noted this tick's (trigger, action) on the tracker's pending
+    # slot during the heartbeat above; fold it into the rolling window here.
+    # Waking ticks only — dream_tick() never calls select_conduct, and
+    # _run_tick never serves dream ticks. Consume-or-drop: a pending note
+    # whose tick/action doesn't match this heartbeat is stale (e.g. a direct
+    # select_conduct call outside a tick) and is discarded, never applied
+    # to a later tick — a missed observation is safe, a misattributed one
+    # is the hazard. The sidecar saves whenever the window moved; a state
+    # transaction opens only when formed-habit state actually changed, and
+    # reconciles through the freshly restored tracker so the payload
+    # INSERT OR REPLACE persists exactly what the sidecar says. Runs first,
+    # before sync() below, because sync() may open a transaction and
+    # _restore would swap in a fresh tracker with an empty pending slot.
+    needs_after = dict(subject.engine.state.needs)
+    htracker = subject.workspace.habits_tracker
+    if htracker is not None:
+        pending = htracker.take_pending()
+        if (pending is not None and pending["tick"] == result["tick"]
+                and pending["action"] == result["action"]):
+            deltas = {k: needs_after.get(k, 0.0) - needs_before.get(k, 0.0)
+                      for k in set(needs_before) | set(needs_after)}
+            sidecar_changed, state_changed = htracker.observe_tick(
+                tick=pending["tick"], trigger=pending["trigger"],
+                action=pending["action"],
+                dominant_need=pending["dominant_need"], need_deltas=deltas)
+            if sidecar_changed:
+                htracker.save()
+            if state_changed:
+                with subject._transaction():
+                    subject.workspace.habits_tracker.reconcile_state_habits(
+                        subject.engine.state.habits)
     # Ambivalence traces (2026-10-01): flush any contested-margin markers
     # the observation wrapper noted during the tick. Waking ticks only —
     # _run_tick never serves dream ticks (dream_tick() is a separate

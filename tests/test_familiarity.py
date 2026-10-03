@@ -120,14 +120,18 @@ def _patched_cli(tmp: Path):
     salience = tmp / "salience.json"
     interoception = tmp / "interoception.json"
     familiarity = tmp / "familiarity.json"
+    habits = tmp / "habits-formed.json"
     inbox = tmp / "inbox"
     proposals = tmp / "proposals"
     archive = tmp / "archive"
+    ambivalence = tmp / "ambivalence.json"
     saved = (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION,
-             cli.FAMILIARITY, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
-    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, \
-        cli.PROPOSALS, cli.ARCHIVE = (db, inbox, salience, interoception,
-                                      familiarity, proposals, archive)
+             cli.FAMILIARITY, cli.HABITS, cli.AMBIVALENCE, cli.PROPOSALS,
+             cli.ARCHIVE, cli._subject)
+    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.HABITS, \
+        cli.AMBIVALENCE, cli.PROPOSALS, cli.ARCHIVE = (
+            db, inbox, salience, interoception, familiarity, habits,
+            ambivalence, proposals, archive)
     inbox.mkdir(exist_ok=True)
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
@@ -145,7 +149,8 @@ def _patched_cli(tmp: Path):
 
 def _restore_cli(saved):
     (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
-     cli.PROPOSALS, cli.ARCHIVE, cli._subject) = saved
+     cli.HABITS, cli.AMBIVALENCE, cli.PROPOSALS, cli.ARCHIVE,
+     cli._subject) = saved
 
 
 # -- fitness: streak builds to threshold, boost engages -----------------------

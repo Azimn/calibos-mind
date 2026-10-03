@@ -76,6 +76,7 @@ class CliOnTmp:
             "INBOX": tmp / "inbox",
             "SALIENCE": tmp / "salience.json",
             "INTEROCEPTION": tmp / "interoception.json",
+            "HABITS": tmp / "habits-formed.json",
             "PROPOSALS": tmp / "proposals",
             "ARCHIVE": tmp / "archive",
             "DREAMS": tmp / "dreams",

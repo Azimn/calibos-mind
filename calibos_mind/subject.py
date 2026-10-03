@@ -37,11 +37,13 @@ def validate_thought_text(text: str) -> str:
 
 class CalibosSubject(EndogenousSubject):
     def __init__(self, *args, salience_path=None, interoception_path=None,
-                 familiarity_path=None, ambivalence_path=None, **kwargs):
+                 familiarity_path=None, ambivalence_path=None, habits_path=None,
+                 **kwargs):
         self._salience_path = salience_path
         self._interoception_path = interoception_path
         self._familiarity_path = familiarity_path
         self._ambivalence_path = ambivalence_path
+        self._habits_path = habits_path
         self._dreaming = False
         super().__init__(*args, **kwargs)
         # Fresh stores get a stock workspace from __init__; existing stores are
@@ -52,6 +54,7 @@ class CalibosSubject(EndogenousSubject):
         self._attach_interoception()
         self._attach_familiarity()
         self._attach_ambivalence()
+        self._attach_habits()
 
     def _attach_salience(self):
         if self._salience_path is not None:
@@ -93,6 +96,22 @@ class CalibosSubject(EndogenousSubject):
                 self._ambivalence_path)
             install_observer(self)
 
+    def _attach_habits(self):
+        # Conduct-chasing habit formation (see habits.py). The tracker
+        # constructor only reads the sidecar; the select_conduct observer
+        # notes (trigger, action) during the tick, and cli._run_tick folds
+        # the note into the rolling window after the heartbeat. Waking
+        # ticks only — dream_tick() never calls select_conduct. The
+        # observer is (re-)installed on the current engine instance here
+        # because _restore swaps in a fresh engine on every transaction —
+        # install_habit_observer is idempotent, so re-attaching is a no-op
+        # when the instance is already observed.
+        if self._habits_path is not None:
+            from .habits import HabitFormationTracker, install_habit_observer
+            self.workspace.habits_tracker = HabitFormationTracker(
+                self._habits_path)
+            install_habit_observer(self)
+
     def _live_open_keys(self) -> set[str]:
         from .unresolved import live_open_keys
         return live_open_keys(self.engine.state, self.continuity.state)
@@ -104,6 +123,7 @@ class CalibosSubject(EndogenousSubject):
         self._attach_interoception()
         self._attach_familiarity()
         self._attach_ambivalence()
+        self._attach_habits()
         self.trigger = {"kind": "none", "parents": [], "depth": 0}
 
     def _add(self, source, text, **metadata):

@@ -368,6 +368,7 @@ branch-specific intervention. Components to enumerate (with SHA-256):
 - `inbox/` — every `prompt-*.json` plus `.seq`
 - `dreams/` — all fragment logs (rehearsal state derives from them)
 - `proposals/proposals.json` and `archive/` (`memories.jsonl` + `availability.json`) — availability shapes views
+- `habits-formed.json` — formed habits fire within-channel at strength >= 0.65 (added 2026-10-02)
 - logical engine tick
 
 **Determinism accounting:**
@@ -388,7 +389,76 @@ run rather than run on an incomplete manifest.
 
 ---
 
-## 9. Ambiguities found while documenting
+## 9. Habit formation sidecar — `habits-formed.json`
+
+Conduct-chasing habit formation (2026-10-02; Domain 8, Habits and
+procedural continuity): the frozen engine fires cartridge habits inside
+the already-chosen intention channel at strength >= 0.65, but strength was
+a fixed constant and the set was closed. This sidecar is the tracker's
+continuity — the rolling co-fire window, formed-habit metadata, and the
+removal archive. `engine.state.habits` in `mind.db` is a *projection* of
+it (reconciled after every change); the sidecar is authoritative.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `window` | list[object] | yes | Last 8 observed waking ticks (rolling), oldest first |
+| `window[].tick` | int | yes | Engine tick of the observation |
+| `window[].trigger` | string | yes | Dominant trigger context: the need or pressure key driving the tick, by the engine's own channel rule (pressure wins iff p >= n + 0.12) |
+| `window[].action` | string | yes | The chosen action (`result['action']` from the heartbeat) |
+| `window[].dominant_need` | string | yes | Head of the need triage that tick — the formation delta proxy when the trigger is a pressure (a pressure has no need-delta of its own) |
+| `window[].delta` | float | yes | Rounded per-tick delta of the trigger-relevant need (trigger's own delta for need triggers, dominant need's for pressure triggers) |
+| `formed` | object | yes | Formed habits, keyed `formed:<trigger>:<action>` (sorted); only one per pair; authored habits never appear here |
+| `formed.<key>.trigger` / `.action` | string | yes | The crystallized pair |
+| `formed.<key>.strength` | float | yes | Current strength: 0.45 at crystallization, +0.02/co-fire capped at 0.70, −0.05/disuse tick |
+| `formed.<key>.peak` | float | yes | Max strength reached (for the archival note) |
+| `formed.<key>.created_tick` | int | yes | Crystallization tick |
+| `formed.<key>.cofires` | int | yes | Co-fire ticks counted since formation |
+| `formed.<key>.last_tick` | int | yes | Most recent co-fire tick |
+| `archived` | list[object] | yes | Removal notes, newest last, capped at 64 |
+| `archived[].key` | string | yes | The removed habit's key |
+| `archived[].peak` | float | yes | Peak strength before removal |
+| `archived[].lifespan_ticks` | int | yes | `archived_tick − created_tick` |
+| `archived[].reason` | string | yes | Written reason, currently always `"decayed below formation floor through disuse"` |
+| `archived[].archived_tick` | int | yes | Removal tick |
+
+**Formation rule:** a (trigger, action) pair co-firing >= 3 times within
+the window crystallizes at strength 0.45 iff the mean per-tick delta of
+the trigger need across those co-fire ticks is <= 0 (the behavior isn't
+making its driving need worse). Growth +0.02 per subsequent co-fire, hard
+cap 0.70 — deliberately below the strongest authored habit
+(`curious_question`, 0.72): formed habits modulate, authored habits
+define identity. Disuse decay −0.05 per waking tick where the trigger is
+dominant but a different action is chosen; below 0.30 the habit is removed
+from `state.habits` and archived with a written reason.
+
+**Lifecycle:**
+- observe: `cli._run_tick` after `subject.heartbeat()` (waking ticks
+  only — the `select_conduct` observer never fires on the dream path);
+  the sidecar saves whenever the window moved; a state transaction opens
+  only when formed-habit state actually changed
+- writes are atomic (temp file + `os.replace` + fsync in the same
+  directory): a crash mid-write leaves the old or the new body, never a
+  truncated shell
+- load contract is fail-loud (2026-10-02, round-1 critic fix): a missing
+  file is a fresh start, but a present file that is unparseable, has the
+  wrong top-level shape, or holds a malformed `formed` entry raises
+  `ValueError` — the stale-key deletion in `reconcile_state_habits`
+  treats the formed map as ground truth, so silently adopting empty
+  state would delete live habits with no archival note (silent-zero
+  genome class)
+- `mind init --force` wipes the sidecar (ids/ticks restart; stale
+  formation windows must never attach to a reseeded incarnation)
+- read-only commands (`mind drift`, `mind status`, `mind review`, …)
+  never tick, so they never write it
+
+**Content vs format:** the window and strengths are private procedural
+history. Private, local-only, gitignored. The formation/growth/decay
+rules and schema are the public contract. Synthetic example in
+`examples/habits-formed.example.json`.
+
+---
+
+## 10. Ambiguities found while documenting
 
 1. **Dream fragment `parents`/`depth`:** passed through verbatim from the
    engine trigger dict; their exact id format and depth semantics are
