@@ -11,6 +11,22 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-04 — provenance sidecar reset on reseed (remember critic r1 fix)
+
+### What
+`mind init --force` now unlinks `provenance.json` alongside the other
+sidecars. Stale weighed/discarded/carrying/unsure traces could otherwise
+attach to a reseeded incarnation's recycled record ids — `mind review`
+would render the dead memory's decider trace as the new record's own.
+
+### Why
+Round-1 critic review of `mind remember` (commit 7b37c1e) caught it as a
+failing test (genome: sidecar/state reset on reseed). The bug predates
+`remember` (the sidecar landed in 5f9edb4) but the review's checklist
+explicitly names the provenance sidecar, so the fix ships here.
+`tests/adversarial/test_critic_remember_r1.py`: 10/10 green; full suite
+518/518.
+
 ## 2026-10-04 — stemmer trailing-"e" collapse (critic round 3, builder fix)
 
 ### What

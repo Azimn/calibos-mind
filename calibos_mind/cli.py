@@ -144,6 +144,13 @@ def cmd_init(args):
     # only.
     if HABITS.exists():
         HABITS.unlink()
+    # Thought-provenance sidecar (2026-10-04): stale weighed/discarded/
+    # carrying/unsure traces must never attach to a reseeded incarnation's
+    # recycled ids (same bug class as the salience/familiarity resets
+    # above) — the dead memory's decider trace would otherwise be
+    # rendered as the new record's own.
+    if PROVENANCE.exists():
+        PROVENANCE.unlink()
     # The confidence-decay policy sidecar must restart too: a streak carried
     # across reseed would penalize a fresh mind's first stale prompt
     # (same bug class as the salience reset above).
