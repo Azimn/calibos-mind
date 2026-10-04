@@ -10,6 +10,8 @@ indefinitely. Quick reference:
     mind answer <id> "thought"         think the thought (through the inner ear)
     mind answer <id> --silent          let that one pass
     mind think "thought"               think voluntarily, no prompt needed
+    mind remember "fact"             merger write path: keep a durable chat learning
+                                     as a first-class chat-learned memory (+provenance)
     mind dream [--ticks N]             sleep: dream ticks, no outside world; body/tick/conduct frozen, fragments logged not thought
     mind recall [n]                    review recent dream fragments
     mind resolve <id> [--released]     close a commitment (done, or released)
@@ -550,6 +552,60 @@ def cmd_think(args):
     return 0
 
 
+def cmd_remember(args):
+    """Merger write path (2026-10-04): durable learnings from conversation
+    enter the mind's record path with provenance, instead of bypassing the
+    machinery as prose notes elsewhere. The memory is first-class
+    chat-learned (generated_by="chat") — psychologically distinct from
+    cartridge seeds (authored temperament priors) and from lived experience
+    (heartbeat observations). No heartbeat tick runs: remembering is a
+    write, not an experience."""
+    from .provenance import ProvenanceTracker
+    text = args.text.strip()
+    if not text:
+        print("refused — empty memory; nothing recorded.")
+        return 1
+    subject = _subject()
+    # Exact-duplicate guard: the self is not recorded twice. Near-duplicates
+    # are the consolidation loop's business (Jaccard dedupe); exact repeats
+    # are almost always a retried command.
+    for r in subject.workspace.records:
+        if r.source == "memory" and r.first_person == text:
+            print(f"refused — already remembered as {r.id}; nothing recorded.")
+            return 1
+    if args.concepts:
+        pair = tuple(c.strip() for c in args.concepts.split(",", 1))
+        if len(pair) != 2 or not all(pair):
+            print("refused — --concepts must be 'category,slug'; nothing recorded.")
+            return 1
+        concepts_pair = pair
+    else:
+        from jelly_psiduck.runtime import concepts as _concepts
+        concepts_pair = tuple(sorted(_concepts(text)))
+    with subject._transaction():
+        item = subject._add("memory", text, concepts=concepts_pair,
+                            generated_by="chat")
+    rid = item.id
+    # A kept memory is revealed preference: it mattered enough to keep.
+    r = _record_map(subject).get(rid)
+    if r is not None:
+        tracker = _tracker(subject)
+        tracker.add_importance(rid, r["tick"], 0.3)
+        tracker.save()
+    # Provenance: how the memory was reached, so a future session inherits
+    # the decider as well as the decision. Same sidecar as thoughts; the
+    # tracker is keyed by record id, not by record class.
+    prov = ProvenanceTracker(PROVENANCE)
+    if r is not None and prov.record(rid, r["tick"],
+                                     weighed=getattr(args, "weighed", None) or (),
+                                     discarded=getattr(args, "discarded", None) or (),
+                                     carrying=getattr(args, "carrying", None) or (),
+                                     unsure=getattr(args, "unsure", None) or ()):
+        prov.save()
+    print(f"remembered as {rid} (generated_by=chat).")
+    return 0
+
+
 def cmd_resolve(args):
     subject = _subject()
     comms = subject.continuity.state.commitments
@@ -1055,6 +1111,24 @@ def main(argv=None):
     p.add_argument("--unsure", action="append", default=None,
                    help="what remained genuinely unsure (repeatable)")
     p.set_defaults(func=cmd_think)
+
+    p = sub.add_parser("remember", help="merger write path: keep a durable "
+                                       "learning from conversation as a "
+                                       "first-class chat-learned memory")
+    p.add_argument("text", help="the durable fact, preference, or decision")
+    p.add_argument("--concepts", default=None, metavar="CAT,SLUG",
+                   help="concept pair for retrieval (default: auto-extracted)")
+    p.add_argument("--weighed", action="append", default=None,
+                   help="an alternative or consideration weighed (repeatable); "
+                        "stored as memory provenance")
+    p.add_argument("--discarded", action="append", default=None,
+                   help="an option considered and discarded (repeatable)")
+    p.add_argument("--carrying", action="append", default=None,
+                   help="open loop / momentum this memory carries forward "
+                        "(repeatable); first-class, distinct from --unsure")
+    p.add_argument("--unsure", action="append", default=None,
+                   help="what remained genuinely unsure (repeatable)")
+    p.set_defaults(func=cmd_remember)
 
     p = sub.add_parser("wake",
                        help="reconciliation ritual: briefing, or affirm identity assumption")

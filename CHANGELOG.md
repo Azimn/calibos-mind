@@ -45,6 +45,39 @@ carrying/unsure distinctness, think persistence, review rendering, briefing
 read-only, affirm recording. Full suite green.
 
 
+## 2026-10-04 — merger write path: `mind remember`
+
+### What
+New `mind remember TEXT` command: durable learnings from conversation enter
+the mind's record path instead of bypassing the machinery as prose notes
+elsewhere. Stores a `memory`-class record stamped `generated_by="chat"` —
+first-class chat-learned, psychologically distinct from cartridge seeds
+(authored temperament priors) and lived experience (heartbeat
+observations). Supports `--concepts CAT,SLUG` (default: auto-extracted)
+plus full provenance flags `--weighed/--discarded/--carrying/--unsure`,
+recorded in the local sidecar keyed by record id. A kept memory marks
+salience importance 0.3 (revealed preference, same as `think`). Refuses
+empty text, malformed `--concepts`, and exact-duplicate text (the self is
+not recorded twice; near-duplicates stay the consolidation loop's
+business). No heartbeat tick runs: remembering is a write, not an
+experience.
+
+### Why
+Merger phase 1 (Jay-approved 2026-10-04): one continuity substrate. Chat
+memory and the mind's store overlapped in function but obeyed different
+machinery; `remember` makes the store the canonical write path for durable
+chat learnings. Phase 2 (read path: MEMORY.md as a generated view of the
+store) is still open. Stage A constraint preserved: merge now, with the
+freeze-time split pre-planned (experimental branch sealed at freeze).
+
+### Fitness
+9 new tests in `tests/test_remember.py`: record class/origin, explicit and
+auto concepts, provenance persistence, duplicate/empty/malformed refusal,
+importance marking, no-tick discipline, no sidecar without provenance.
+Full suite green (279 passed; one pre-existing adversarial failure in
+test_critic_consolidate_r3, also failing on the clean tree).
+
+
 ## 2026-10-03 — ambivalence standing-tie consolidation (builder round 1)
 
 ### What
