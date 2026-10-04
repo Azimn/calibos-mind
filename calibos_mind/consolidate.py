@@ -83,6 +83,30 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .attribution import external_attributed
+from .interoception import is_realization_text
+
+
+def _realization_pair(a: "_Rec", b: "_Rec") -> bool:
+    """Both records are domain-10 interoceptive realization records.
+
+    Realization texts are machine-serialized episode markers
+    (interoception.is_realization_text — an anchored serialization-identity
+    check, not a substring heuristic): two distinct texts are distinct
+    historical misreadings by construction, each naming its own
+    swing/convergence ticks. The near-dup rationale ("the same fact worded
+    twice") and the supersede rationale ("the same subject stated again
+    later — newer wins") can therefore never honestly apply to such a pair;
+    the templated wording defeats the similarity gates systematically
+    (subject overlap ~71%, body Jaccard ~69-82% with zero negation markers
+    for the polarity vetoes to catch), and accepting would archive the very
+    memory the mutation exists to keep. Per the regression genome, a wrong
+    archive is the hazard and a missed consolidation is the safe direction,
+    so realization pairs are skipped in the near-dup and deep passes. The
+    exact-dup hash sweep above still applies: byte-identical text ⟺ same
+    (need, swing_tick) ⟺ same episode, i.e. a crash-window double-mint,
+    where "one copy is enough" is true.
+    """
+    return is_realization_text(a.text) and is_realization_text(b.text)
 
 # -- tuning (from the deep-dive §3e verdict table) ------------------------
 
@@ -675,6 +699,8 @@ def scan(records: list[_Rec], store_tick: int, journal: dict,
         a, b = cands[i], cands[j]
         if a.rec.id in slated or b.rec.id in slated:
             continue
+        if _realization_pair(a.rec, b.rec):
+            continue
         if a.rec.source != b.rec.source:
             continue
         union = a.tokset | b.tokset
@@ -722,6 +748,13 @@ def scan(records: list[_Rec], store_tick: int, journal: dict,
     for i, j in pairs_up_to():
         a, b = cands[i], cands[j]
         if a.rec.id in slated or b.rec.id in slated:
+            continue
+        if _realization_pair(a.rec, b.rec):
+            # Distinct serialized episodes are never restatements,
+            # retractions, or conflicts of each other: no supersede, and no
+            # contradiction-flag either (the template carries zero negation
+            # markers, so the polarity-mismatch flag path could not honestly
+            # fire for such a pair anyway).
             continue
         if len(a.subject) < 2 or len(b.subject) < 2:
             continue

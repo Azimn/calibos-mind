@@ -27,6 +27,121 @@ explicitly names the provenance sidecar, so the fix ships here.
 `tests/adversarial/test_critic_remember_r1.py`: 10/10 green; full suite
 518/518.
 
+## 2026-10-04 — interoceptive realization records (domain 10, builder)
+
+### What
+`calibos_mind/interoception.py` now tracks per-need swing→convergence
+episodes: when a real felt/actual gap opens (|felt − actual| > 0.25) and
+later returns to ≤ 0.05, `InteroceptionTracker.update()` returns one
+realization event per closed episode (need, swing tick, felt/actual at the
+swing, max gap, convergence tick). `cli._run_tick` mints each event as
+exactly one `temporal`-class record through the subject's normal
+record-append path (`mint_realization` → `subject._add`), stamped
+`generated_by="cognition"`, with first-person text naming the need, the
+felt band at the swing, the actual band, and both ticks — e.g. "At tick
+T1 I felt thirst as settled, but my body was only urgent; by tick T2 the
+feeling caught up." Bands reuse the tracker's own math (graded
+`felt_level` thresholds; the noise floor on the felt side only, mirroring
+`felt_bands()`). Episodes persist in a new versioned `realization.swing`
+sidecar section (compat-read like the existing sections; `init --force`
+wipes it). Minting is a write inside the existing tick — engine tick and
+trace untouched — and fires only where `update()` is called (the waking
+`_run_tick` path); dream ticks and read-only commands can never mint.
+Crash safety (round 2 below): the close is write-ahead durable
+(marked `closed_tick` + saved before the event leaves `update()`), the
+mint is idempotent on (need, swing_tick), and the next tick re-takes
+unacked marks via `take_pending_closings()` — exactly one record per
+closed episode across kills. Consolidation (round 2 below) skips
+supersede/near-dup proposals between realization records (distinct
+serialized episodes are never restatements); byte-identical exact-dup
+still collapses crash-window double-mints.
+
+### Why
+Domain 10 check "No delayed emotional realization" was absent. This is
+the honest minimal mechanism: a delayed, evidence-based reconciliation
+of a real self-misperception — the memory of having misread oneself, not
+installed emotion. It is causally load-bearing (the record enters view
+eligibility, salience, and dedupe like any engine-originated temporal
+record) and composes with the interoception mutation rather than
+bypassing it. Deliberately kept: first-contact gaps count (the felt body
+starts settled while the engine's default needs do not — a real gap
+under the tracker's documented model), and needs that never diverge
+mint nothing.
+
+### Fitness
+`tests/test_realization.py` (21 tests, all green): scripted 0.2→0.9 step
+→ exactly one record with swing tick, convergence tick, felt band, actual
+band recoverable from the text; quiet runs mint nothing; two episodes →
+two records; byte-identical sidecar + events on identical sequences;
+100-tick random-walk soak → 0 realizations (< 2%); minting leaves engine
+tick and trace byte-identical; `init --force` wipes open episodes;
+drift/status/dream never mint and never move the sidecar; drift R unmoved
+by minting (verified R = 1.0 pre-existing on this synthetic sequence,
+unchanged after). Round-2 pins: write-ahead close mark durable before the
+event leaves update(); take_pending_closings() takes each mark exactly
+once and recovers unacked marks from the file; mint_realization() is
+idempotent across and inside transactions; gap_max <= 0.25 sidecar entries
+dropped at compat-read; writer preserves the strict gap_max > 0.25
+invariant through 6-decimal rounding; parse_realization_text round-trips
+the template and rejects near-misses. Full suite 551 passed, 0 failed
+(the 2 `test_critic_remember_r1.py` failures noted at build time are
+resolved — the parallel remember loop's fix has since landed). No commit
+(backup job handles that).
+
+## 2026-10-04 — interoceptive realization records (domain 10, critic r2 fix)
+
+### What
+Round-1 critic review (`tests/adversarial/test_critic_realization_r1.py`,
+12 tests) returned 4 red; all fixed in code, none in tests:
+
+1+2. Consolidation supersede wrong-archive hazard: the templated
+realization text systematically lands two distinct episodes in the
+supersede band (subject overlap ~71%, body Jaccard ~69–82%) with zero
+negation markers for the polarity vetoes to catch, proposing archival
+under the false "same subject stated again" rationale. Fix: realization
+records are now identified by an anchored fullmatch against the
+mutation's own template (`parse_realization_text`/`is_realization_text`
+in `interoception.py`, built from FELT_BANDS + NEED_LANGUAGE — a
+serialization-identity check, not a substring heuristic), and
+`consolidate.scan()` skips near-dup AND supersede/contradiction-flag
+proposals when both records are realization records. The exact-dup hash
+sweep still applies: byte-identical text ⟺ same (need, swing_tick) ⟺
+same episode, where "one copy is enough" is true (crash-window
+double-mint cleanup). No non-realization proposal is altered.
+3. Crash between mint-commit and sidecar save double-minted: `update()`
+now marks the episode `closed_tick` and saves the sidecar BEFORE the
+event leaves (write-ahead); `mint_realization()` skips when a
+realization for the same (need, swing_tick) already exists — checked
+against `subject.workspace.records`, the in-memory list `_add` appends
+to, so same-transaction mints are visible (no read-your-own-write
+hazard); `cli._run_tick` re-takes unacked marks via
+`take_pending_closings()` before `update()` and acks them after the mint
+commits. Reversing the order (save-then-mint) was rejected: it trades the
+double-mint for a missed realization. Verified end to end: kill between
+mark and mint → re-mint; kill between mint and ack → idempotent skip;
+mid-tick mint failure → retried next tick.
+4. Phantom realization from corrupt-but-well-typed sidecar entry:
+`_read_swing` now drops entries with `gap_max <= SWING_GAP` (an open
+episode invariantly exceeds it — it only opens past the threshold and
+gap_max never shrinks). The writer preserves the strict invariant
+exactly: a true gap in (0.25, 0.2500005] that 6-decimal rounding would
+pull down to 0.25 is stored as 0.250001, so no legitimate episode is ever
+rounded into the corrupt bucket.
+
+### Why
+All four were measured failing tests from the round-1 critic, each a
+concrete hazard (wrong archive, duplicate record, phantom record —
+including the mutation's own stated revert signal). The fixes are
+independently revertable: the consolidate guard, the write-ahead mark +
+idempotent mint, and the compat-read tightening each touch only their
+own path.
+
+### Fitness
+`tests/adversarial/test_critic_realization_r1.py`: 12/12 green (was 8/12);
+builder's `tests/test_realization.py`: 21/21 green (15 original + 6 new
+round-2 pins); full suite 551 passed, 0 failed. No commit (backup job
+handles that).
+
 ## 2026-10-04 — stemmer trailing-"e" collapse (critic round 3, builder fix)
 
 ### What

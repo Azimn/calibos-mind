@@ -273,8 +273,36 @@ def _run_tick(subject):
     # is frozen in sleep) — dream_tick() does not come through here.
     tracker = subject.workspace.interoception_tracker
     if tracker is not None:
-        tracker.update(dict(subject.engine.state.needs),
-                       subject.engine.state.tick)
+        from .interoception import mint_realization
+        # Crash-safe mint discipline (2026-10-04 critic round 2): update()
+        # durably marks each closed episode in the sidecar before returning
+        # its event (write-ahead). A kill between the mint transaction's
+        # commit and the save() below leaves the mark in the file; the next
+        # tick re-takes it here and mint_realization() skips idempotently
+        # when the record already exists — so the window can neither
+        # double-mint nor lose the record. Reversing the order
+        # (save-then-mint) would trade the double-mint for a missed
+        # realization and is not used.
+        pending = tracker.take_pending_closings()
+        realizations = tracker.update(dict(subject.engine.state.needs),
+                                      subject.engine.state.tick)
+        events = pending + realizations
+        if events:
+            # Delayed emotional realization (domain 10): each closed
+            # swing→convergence episode mints exactly one temporal record
+            # through the subject's normal record-append path. The
+            # transaction persists the record, but minting is a write
+            # inside the existing tick — the engine tick and the trace are
+            # untouched, so no new tick is ever opened. Dream ticks and
+            # read-only commands never call update(), so they can never
+            # mint.
+            with subject._transaction():
+                for event in events:
+                    mint_realization(subject, event)
+            # The mint committed: the write-ahead marks may be forgotten.
+            # (If the transaction raised, this never runs and the marks
+            # stay pending for the next tick's take_pending_closings().)
+            tracker.ack_closings(events)
         tracker.save()
     # Familiarity traces (2026-09-28): near-miss retrieval streaks fold one
     # view's outcome into the sidecar, once per waking tick. Never on dream
