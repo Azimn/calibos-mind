@@ -11,6 +11,29 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-04 — stemmer trailing-"e" collapse (critic round 3, builder fix)
+
+### What
+`calibos_mind/consolidate.py::_stem` now strips one trailing "e" (length
+guard, after the plural/tense rules). "arrive"/"arrives", "love"/"loves",
+"gate"/"gates" collapse to one stem; before, the plural rules produced
+"arriv" from "arrives" while the bare base kept its "e" ("arrive") —
+one lemma split across two stems.
+
+### Why
+The round-3 critic battery caught a real blind spot, not a test-shape
+artifact: "the morning train arrives at platform nine on time" vs "the
+morning train won't arrive at platform nine on time during the strike"
+sat below every consolidation threshold (containment 0.833, not the
+1.0 the text reads as), so the pair vanished from the scan entirely —
+the round-3 negation-polarity vetoes never got a chance to fire, and a
+negated near-duplicate, the highest-value pair to surface, produced
+silence. With the collapse, containment reaches 1.0, the near-dup pass
+fires, the polarity veto reroutes to a contradiction-flag (zero
+mutation, waker disposes), and no archive-bearing proposal is minted.
+`tests/adversarial/test_critic_consolidate_r3.py::test_critic3_supersede_veto_contraction_negation`
+now passes; full suite 508/508 green. No cartridge or protocol change.
+
 ## 2026-10-04 — thought provenance + wake ritual (merger mutation)
 
 ### What

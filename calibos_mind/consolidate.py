@@ -178,23 +178,43 @@ def _stem(token: str) -> str:
     """Light deterministic suffix stemmer (English-first, not Porter).
 
     Collapses the common inflectional endings so "gates"/"gate",
-    "walking"/"walked"/"walk" compare equal. Deliberately conservative:
-    short tokens pass through untouched.
+    "walking"/"walked"/"walk" — and, crucially, "arrive"/"arrives" —
+    compare equal. Deliberately conservative: short tokens pass through
+    untouched.
+
+    The trailing-"e" strip is load-bearing, not cosmetic. The plural
+    rules turn "arrives" into "arriv" while the bare base "arrive" kept
+    its "e", splitting one lemma across two stems. That asymmetry
+    blinded the similarity math to genuine overlap: a contraction-
+    negated complement ("the morning train arrives ..." vs "the morning
+    train won't arrive ...") could sit below every consolidation
+    threshold while reading as containment 1.0 to a human — so the
+    negation-polarity vetoes never got a chance to fire and the pair
+    vanished from the scan entirely. Stripping one trailing "e"
+    collapses base and inflected forms onto the same stem.
     """
     if len(token) <= 3:
         return token
     if token.endswith("ies") and len(token) > 4:
-        return token[:-3] + "y"
-    for suffix in ("ingly", "edly"):
-        if token.endswith(suffix) and len(token) > len(suffix) + 2:
-            return token[: -len(suffix)]
-    for suffix in ("ing", "ed"):
-        if token.endswith(suffix) and len(token) > len(suffix) + 2:
-            return token[: -len(suffix)]
-    if token.endswith("es") and len(token) > 4:
-        return token[:-2]
-    if token.endswith("s") and len(token) > 3 and not token.endswith("ss"):
-        return token[:-1]
+        token = token[:-3] + "y"
+    else:
+        for suffix in ("ingly", "edly"):
+            if token.endswith(suffix) and len(token) > len(suffix) + 2:
+                token = token[: -len(suffix)]
+                break
+        else:
+            for suffix in ("ing", "ed"):
+                if token.endswith(suffix) and len(token) > len(suffix) + 2:
+                    token = token[: -len(suffix)]
+                    break
+            else:
+                if token.endswith("es") and len(token) > 4:
+                    token = token[:-2]
+                elif (token.endswith("s") and len(token) > 3
+                        and not token.endswith("ss")):
+                    token = token[:-1]
+    if token.endswith("e") and len(token) > 3:
+        token = token[:-1]
     return token
 
 
