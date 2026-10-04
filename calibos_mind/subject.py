@@ -117,12 +117,30 @@ class CalibosSubject(EndogenousSubject):
         return live_open_keys(self.engine.state, self.continuity.state)
 
     def _restore(self, raw):
+        # Ambivalence pending carryover (2026-10-03, critic round 1): the
+        # trackers below are rebuilt from disk on every transaction, but
+        # the ambivalence pending buffer stages real observations from a
+        # tick that already happened — discarding it would strand a run's
+        # onset on the dead tracker while the run itself survives on the
+        # subject (orphan offset later). The staged markers move onto the
+        # fresh tracker, so the tick's own flush still writes them. This
+        # differs deliberately from the habits pending slot, which is
+        # consume-or-drop by design (folding it twice would double-count
+        # the observation); a staged sidecar marker is data, and losing
+        # it is the hazard. Capture BEFORE super()._restore(raw): the
+        # frozen restore already swaps in a fresh workspace.
+        old_atracker = getattr(self.workspace, "ambivalence_tracker", None)
+        stranded = old_atracker._pending if old_atracker is not None else []
+        if old_atracker is not None:
+            old_atracker._pending = []
         super()._restore(raw)
         self.workspace = CalibosWorkspace.from_dict(raw["workspace"])
         self._attach_salience()
         self._attach_interoception()
         self._attach_familiarity()
         self._attach_ambivalence()
+        if stranded:
+            self.workspace.ambivalence_tracker._pending = stranded
         self._attach_habits()
         self.trigger = {"kind": "none", "parents": [], "depth": 0}
 

@@ -427,7 +427,16 @@ def cmd_answer(args):
             print(f"{args.id}: refused — {exc}; prompt kept.")
             return 1
     provider = InboxCognition(INBOX)
-    payload = provider.consume(args.id)
+    try:
+        payload = provider.consume(args.id)
+    except ValueError as exc:
+        # Missing (already answered, let pass, or superseded-and-deleted)
+        # prompt ids used to surface a raw traceback (observed 2026-10-04
+        # when a heartbeat-superseded prompt was answered by its old id).
+        # Say it plainly instead; nothing was consumed, so no settlement
+        # is owed.
+        print(f"{args.id}: {exc}; nothing consumed.")
+        return 1
     subject = _subject()
     tracker = _tracker(subject)
     now = subject.engine.state.tick

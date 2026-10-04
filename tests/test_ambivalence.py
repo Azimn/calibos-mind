@@ -35,10 +35,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import calibos_mind.cli as cli
 from calibos_mind.ambivalence import (
     AMBIVALENCE_CAP,
+    CHANNEL_RULE_BYPASS_KINDS,
     CONTESTED_MARGIN,
     AmbivalenceTracker,
     contested_marker,
     install_observer,
+    open_run,
 )
 from calibos_mind.subject import CalibosSubject
 from calibos_mind.provider import InboxCognition
@@ -250,7 +252,10 @@ def test_action_selection_byte_identical_to_pristine():
 
 def test_observer_survives_restore_without_double_counting():
     # _restore swaps in a fresh engine on every transaction; the observer
-    # must be re-installed (still exactly one wrapper -> one marker).
+    # must be re-installed (still exactly one wrapper -> one observation
+    # per selection). Under standing-tie consolidation the two same-tick
+    # selections below extend a single open run: exactly one onset marker,
+    # no double-noting, and no duplicate onset after the restore cycle.
     tmp = _tmp()
     subject = _make_subject(tmp)
     with subject._transaction():
@@ -266,7 +271,24 @@ def test_observer_survives_restore_without_double_counting():
     assert tracker.pending == 1, "double-wrapped observer would note twice"
     install_observer(subject)  # explicit re-install is a no-op
     subject.engine.select_conduct(Event("message", "tester", "hello again"))
-    assert tracker.pending == 2
+    # Same tick, same standing tie: the run extends instead of noting
+    # again — still exactly one staged marker.
+    assert tracker.pending == 1
+    run = open_run(subject)
+    assert run is not None and run.absorbed == 2
+    # A later tick extends the same run; a clear margin then closes it
+    # with exactly one offset marker (onset + offset for a multi-tick run).
+    subject.engine.state.tick += 1
+    subject.engine.select_conduct(Event("message", "tester", "third"))
+    assert tracker.pending == 1
+    _set_state(subject,
+               needs={"thirst": 0.90, "hunger": 0.05, "energy": 0.95, "comfort": 0.95},
+               pressures={"fear": 0.10, "trust": 0.5},
+               baselines={"fear": 0.0, "trust": 0.0})
+    subject.engine.state.tick += 1
+    subject.engine.select_conduct(Event("message", "tester", "clear"))
+    assert tracker.pending == 2, "expected onset + offset for the closed run"
+    assert open_run(subject) is None
 
 
 def test_dream_path_notes_nothing():

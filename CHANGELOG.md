@@ -78,6 +78,29 @@ Full suite green (279 passed; one pre-existing adversarial failure in
 test_critic_consolidate_r3, also failing on the clean tree).
 
 
+## 2026-10-04 — answer UX: missing prompt refused cleanly
+
+### What
+`mind answer <id>` on an id with no pending prompt file (already answered,
+let pass, or superseded-and-deleted) used to surface a raw Python traceback
+from `InboxCognition.consume`. Now caught in `cmd_answer`: prints
+`<id>: no such pending prompt: <id>; nothing consumed.` and exits 1. No
+settlement is owed (nothing was consumed), so expectation bookkeeping is
+untouched — unlike the consumed-but-stale path, which still settles as
+`refused-stale-view`.
+
+### Why
+Wake-ritual friction: the heartbeat at wake start mints and supersedes
+standing engine prompts, so answering by a just-seen id can miss the file.
+A missing id is a normal state, not an exception worth a stack trace.
+
+### Fitness
+Manual: `./mind answer 0160 --silent` and `./mind answer prompt-9999
+--silent` both print the clean message and exit 1 (refusal, like the other
+refusal paths), with no traceback; stale-prompt path (consume-then-refuse)
+unchanged.
+
+
 ## 2026-10-03 — ambivalence standing-tie consolidation (builder round 1)
 
 ### What
