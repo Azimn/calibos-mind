@@ -11,6 +11,163 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-04 — thought provenance + wake ritual (merger mutation)
+
+### What
+`calibos_mind/provenance.py` (new): local-only sidecar mapping thought IDs to
+how they were reached — `weighed`, `discarded`, `carrying`, `unsure`.
+`carrying` (momentum deliberately inherited) and `unsure` (genuine
+uncertainty) are first-class and never merged: psychologically different
+states must not be reconstructed from a lossy conflation. No-op write
+discipline, deterministic sorted JSON, frozen engine records untouched.
+
+CLI:
+- `mind think` gains `--weighed` / `--discarded` / `--unsure` (repeatable).
+- `mind review` renders provenance traces and tags `[wake]` thoughts.
+- `mind wake` (new): the reconciliation ritual. Without flags, prints the
+  wake briefing — open loops, dreams, drift, previous wake record — read-only
+  (no sidecar write, no new records). With `--affirm "TEXT"`
+  [--carrying ...] [--unsure ...], records the assumption-of-identity as a
+  first-class wake thought (`generated_by="wake"`) with provenance.
+
+### Why
+Jay decided 2026-10-04 that the mind being built should BE Calibos (merger,
+not siblinghood), with portability as the lifeboat requirement. The seam
+between sessions cannot be literally closed while each session starts fresh,
+but it can be made explicit and causally useful: inherit the decider (what
+was weighed, discarded, carried, doubted), not just the decision. Wake as
+deliberate identity-assumption, not silent file loading. "I'd rather inherit
+a question than a biography."
+
+### Fitness
+`tests/test_thought_provenance.py` (8 tests): determinism, no-op writes,
+carrying/unsure distinctness, think persistence, review rendering, briefing
+read-only, affirm recording. Full suite green.
+
+
+## 2026-10-03 — ambivalence standing-tie consolidation (builder round 1)
+
+### What
+`calibos_mind/ambivalence.py`: consecutive per-tick contested-margin
+markers for the same standing near-tie are now consolidated into runs.
+`contested_marker()` is untouched — it stays the pure per-tick ground
+truth for contested/not-contested, and the consolidation never
+contradicts it. The wrapper (`install_observer`'s observed chooser)
+keeps an in-memory open run per subject — (contenders, channels) pair,
+onset tick, last tick, margin min/max, absorbed count. A tick that would
+emit a marker with a matching pair and a still-contested margin extends
+the run instead of emitting. The first tick of a run emits an onset
+marker (today's seven fields plus `"run": "onset"`; the `margin` field is
+the run's initial margin). When the run ends — clear margin, contender/
+channel change, or channel-rule bypass (apology path) — a multi-tick run
+emits an offset marker naming `onset_tick`, `offset_tick` (the first tick
+that was not a continuation), `last_tick`, `margin_min`/`margin_max`, and
+`reason` ("clear"/"changed"/"bypass"). A one-tick run emits nothing
+further: the onset marker stands alone as its exactly-one marker, with
+today's seven fields intact. The full drift signal is recoverable from
+the marker stream alone.
+
+Run state lives on the subject instance, deliberately: `_restore` swaps
+in a fresh engine and a fresh `AmbivalenceTracker` on every transaction,
+so subject-level state is the only in-memory surface that survives a
+tick boundary (a run broken across restores was the failure this design
+had to avoid). `install_observer` never resets it. Run state is never
+persisted: on process restart mid-tie the next contested tick starts a
+fresh run — the earlier onset is already in the sidecar, so the contest
+is never lost, only its continuity across the restart (documented in the
+module docstring). Read-only commands and dream ticks never create,
+extend, or close runs; identical tick sequences still produce
+byte-identical sidecars. 14 new tests in
+`tests/adversarial/test_builder_ambivalence_consolidation.py`, all on
+synthetic /tmp stores; `test_observer_survives_restore_without_double_counting`
+updated for consolidation semantics (same-tick re-selections extend the
+run instead of noting again).
+
+### Why
+Articles of Artificiality, Domain 7 (Motivation): the contested-margin
+markers shipped 2026-10-01 recorded a standing condition as events — in
+vivo all 28 markers ever logged (ticks 297–324) were ONE standing
+attachment-vs-thirst near-tie with a steadily drifting margin, tripping
+the mutation's own ">50% of ticks" noise revert signal. Consolidation
+keeps the trace faithful (every contested tick is still accounted for:
+onset, absorbed span, or offset) while making standing conditions read
+as one condition, not N events. The 10-tick synthetic fitness case now
+emits 2 markers (onset + offset) instead of 10; isolated single-tick
+near-ties still emit exactly one marker.
+
+### Round-1 builder notes for the critic
+- The `abs(margin) <= CONTESTED_MARGIN` extension check (not `<`) is
+  deliberate: a raw margin in [0.11995, 0.12) rounds to exactly 0.12
+  while still being inside the deadband — `<` would spuriously close the
+  run there. Any emitted marker has |rounded margin| <= 0.12 by
+  construction, so `<=` is the faithful "still contested" check.
+- `tests/test_ambivalence.py::test_observer_survives_restore_without_double_counting`
+  was updated, not weakened: it still pins single-wrapper observation
+  across a restore cycle, now asserting run extension instead of a
+  second marker.
+- Known pre-existing failure on pristine code (unrelated):
+  `tests/adversarial/test_critic_consolidate_r3.py::test_critic3_supersede_veto_contraction_negation`
+  fails identically before this change.
+
+## 2026-10-03 — ambivalence standing-tie consolidation (builder round 2: critic FAILs)
+
+### What
+Two concrete critic round-1 failures fixed, both about run/onset
+survival across the per-transaction `_restore`:
+
+1. **Pending onset orphaned by a mid-tick transaction** (`cli.py`,
+   `subject.py`). `cli._run_tick` flushed the ambivalence tracker AFTER
+   the habits block, but the habits reconcile may open a transaction when
+   formed-habit state changed — and `_restore` swaps in a fresh tracker
+   with an empty pending buffer, stranding the staged onset on the dead
+   tracker while the run survives on the subject (orphan offset later).
+   Two changes: (a) the ambivalence flush moved to immediately after
+   `subject.heartbeat()`, before the habits block — matching the hazard
+   the old flush comment already documented; (b) `CalibosSubject._restore`
+   now carries the old tracker's pending buffer onto the fresh tracker
+   (captured BEFORE `super()._restore()`, which already swaps the
+   workspace), so a staged onset is never lost to a swap on any path —
+   e.g. `heartbeat()` itself runs inside `_transaction()`. This differs
+   deliberately from the habits pending slot (consume-or-drop: folding it
+   twice would double-count); a staged sidecar marker is data, and losing
+   it is the hazard.
+2. **Failed onset note left an orphan run** (`ambivalence.py`).
+   `_absorb_contested` recorded the run on the subject BEFORE
+   `tracker.note(onset)`; a staging failure (swallowed by the observer
+   wrapper) left an open run whose onset never reached the stream, which
+   the next contested tick silently extended. Staging order is now
+   note-then-record: if `note()` raises, no run survives and the next
+   contested tick opens a fresh run with its own onset. Mirror hardening
+   in `_close_open_run` (not required for sign-off, judged clean and
+   symmetric): the offset is noted BEFORE the run is cleared, so a
+   staging failure keeps the run open and a later close emits one offset
+   for the whole span instead of dropping the run.
+
+Also clarified the module docstring on the spec wording the critic
+flagged: the seven fields `contested_marker` emits are unmodified; the
+eighth field (`"run"`) is additive and documented. `contested_marker`
+itself is untouched and still pure.
+
+5 new tests in
+`tests/adversarial/test_builder_ambivalence_consolidation_r2.py` (all on
+synthetic /tmp stores), including an end-to-end production-path test
+through `cli._run_tick` with a forced habits-reconcile transaction
+asserting the onset flush precedes the transaction, the two critic
+attack scenarios folded in as regression coverage, a no-duplication
+guard for the carryover, and the offset-note-failure retry case. Both
+critic attack tests in `/tmp/critic_attack_ambivalence.py` now pass;
+full suite: 490 passed, 1 failed — the failure is the known pre-existing
+`test_critic3_supersede_veto_contraction_negation` (fails identically on
+pristine code, unrelated).
+
+### Why
+Fitness (3) of the mutation spec: the full drift signal must be
+recoverable from the marker stream alone. An offset naming an
+onset_tick with no onset marker in the stream is exactly the mutation's
+revert signal ("onset/margin evolution not recoverable") — the primary
+FAIL was a real production path (`_run_tick`'s own habits transaction),
+not a test artifact.
+
 ## 2026-10-02 — habit formation: conduct chasing, not conduct authoring
 
 ### What

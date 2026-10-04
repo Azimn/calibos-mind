@@ -43,6 +43,7 @@ INTEROCEPTION = BASE / "interoception.json"
 FAMILIARITY = BASE / "familiarity.json"
 AMBIVALENCE = BASE / "ambivalence.json"
 HABITS = BASE / "habits-formed.json"
+PROVENANCE = BASE / "provenance.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
@@ -202,6 +203,22 @@ def _run_tick(subject):
     before = len(subject.inspect()["trace"])
     needs_before = dict(subject.engine.state.needs)
     result = subject.heartbeat()
+    # Ambivalence traces (2026-10-01): flush any contested-margin markers
+    # the observation wrapper noted during the tick. Flushed HERE, before
+    # the habits block below — not after it — because the habits
+    # reconcile may open a transaction when formed-habit state changed,
+    # and _restore would swap in a fresh tracker with an empty pending
+    # buffer: the staged onset would die with the discarded tracker while
+    # the run survives on the subject, leaving the later offset naming an
+    # onset_tick with no onset marker in the stream (orphan offset,
+    # 2026-10-03 critic round 1). Waking ticks only — _run_tick never
+    # serves dream ticks (dream_tick() is a separate path), so dream
+    # isolation is untouched. flush() saves only when a marker was
+    # actually noted (no-op write discipline); read-only commands never
+    # tick, so they never write the sidecar.
+    atracker = getattr(subject.workspace, "ambivalence_tracker", None)
+    if atracker is not None:
+        atracker.flush()
     # Habit formation (2026-10-02): conduct chasing. The select_conduct
     # observer noted this tick's (trigger, action) on the tracker's pending
     # slot during the heartbeat above; fold it into the rolling window here.
@@ -234,17 +251,6 @@ def _run_tick(subject):
                 with subject._transaction():
                     subject.workspace.habits_tracker.reconcile_state_habits(
                         subject.engine.state.habits)
-    # Ambivalence traces (2026-10-01): flush any contested-margin markers
-    # the observation wrapper noted during the tick. Waking ticks only —
-    # _run_tick never serves dream ticks (dream_tick() is a separate
-    # path), so dream isolation is untouched. flush() saves only when a
-    # marker was actually noted (no-op write discipline); read-only
-    # commands never tick, so they never write the sidecar. Flushed here,
-    # before sync(), because sync() may open a transaction and _restore
-    # would swap in a fresh tracker with an empty pending buffer.
-    atracker = getattr(subject.workspace, "ambivalence_tracker", None)
-    if atracker is not None:
-        atracker.flush()
     # Inbox-expectation wiring (2026-09-26): stale unanswered prompts become
     # frozen-engine Expectation records so the engine's own temporal /
     # unresolved_concern machinery can resurface them. Waking ticks only —
@@ -517,6 +523,7 @@ def cmd_answer(args):
 
 
 def cmd_think(args):
+    from .provenance import ProvenanceTracker
     subject = _subject()
     try:
         tid = subject.inject_thought(args.text, trigger_kind="voluntary",
@@ -530,6 +537,15 @@ def cmd_think(args):
         tracker = _tracker(subject)
         tracker.add_importance(tid, r["tick"], 0.3)
         tracker.save()
+    # Provenance: how the thought was reached, so a future session inherits
+    # the decider as well as the decision. Stored in the local sidecar; the
+    # frozen engine records are never mutated.
+    prov = ProvenanceTracker(PROVENANCE)
+    if r is not None and prov.record(tid, r["tick"],
+                                     weighed=getattr(args, "weighed", None) or (),
+                                     discarded=getattr(args, "discarded", None) or (),
+                                     unsure=getattr(args, "unsure", None) or ()):
+        prov.save()
     print(f"thought recorded as {tid}.")
     return 0
 
@@ -636,13 +652,125 @@ def cmd_status(args):
 
 
 def cmd_review(args):
+    from .provenance import ProvenanceTracker
     subject = _subject()
     state = subject.inspect()
     thoughts = [r for r in state["workspace"]["records"] if r["source"] == "thought"]
+    prov = ProvenanceTracker(PROVENANCE)
     for r in thoughts[-args.n:]:
-        print(f"[tick {r['tick']}] {r['first_person']}")
+        tag = " [wake]" if str(r.get("generated_by") or "").startswith("wake") else ""
+        print(f"[tick {r['tick']}]{tag} {r['first_person']}")
+        p = prov.get(r["id"])
+        if p:
+            bits = []
+            if p["weighed"]:
+                bits.append("weighed: " + "; ".join(p["weighed"]))
+            if p["discarded"]:
+                bits.append("discarded: " + "; ".join(p["discarded"]))
+            if p.get("carrying"):
+                bits.append("carrying: " + "; ".join(p["carrying"]))
+            if p["unsure"]:
+                bits.append("unsure: " + "; ".join(p["unsure"]))
+            if bits:
+                print("    ↳ " + " | ".join(bits))
     if not thoughts:
         print("no thoughts recorded yet.")
+    return 0
+
+
+def cmd_wake(args):
+    """The reconciliation ritual: assume the identity deliberately, don't just load it.
+
+    Without --affirm: prints the wake briefing — open loops (momentum),
+    dreams, drift, and the previous wake record, so this session's reading
+    can be compared against the last (the session-to-session drift check).
+    With --affirm: records the assumption-of-identity as a first-class wake
+    thought (generated_by="wake"), with optional provenance for what is
+    being carried and what remains unsure.
+    """
+    from .provenance import ProvenanceTracker
+    subject = _subject()
+    state = subject.inspect()
+    eng = state["engine"]
+    prov = ProvenanceTracker(PROVENANCE)
+
+    if getattr(args, "affirm", None):
+        text = args.affirm.strip()
+        if not text:
+            print("wake --affirm needs text; nothing recorded.")
+            return 1
+        try:
+            tid = subject.inject_thought(text, trigger_kind="voluntary",
+                                         generated_by="wake")
+        except ValueError as exc:
+            print(f"refused — {exc}; nothing recorded.")
+            return 1
+        r = _record_map(subject).get(tid)
+        if r is not None:
+            tracker = _tracker(subject)
+            tracker.add_importance(tid, r["tick"], 0.3)
+            tracker.save()
+            # Carrying and unsure are first-class and distinct: carrying is
+            # momentum deliberately inherited, unsure is genuine uncertainty.
+            # Never merge them; review renders each in its own channel.
+            if prov.record(tid, r["tick"],
+                           weighed=(),
+                           discarded=(),
+                           carrying=getattr(args, "carrying", None) or (),
+                           unsure=getattr(args, "unsure", None) or ()):
+                prov.save()
+        print(f"wake recorded as {tid}.")
+        return 0
+
+    # Briefing mode.
+    inbox_n = len(list(INBOX.glob("prompt-*.json")))
+    print(f"wake — tick {eng['tick']} | inbox {inbox_n} waiting")
+    cont = state["continuity"]
+    loops = 0
+    for cid, c in cont["commitments"].items():
+        if c["status"] in {"open", "overdue"}:
+            print(f"  carrying [{c['status']}] {str(cid)[:8]}: {c['description'][:90]}")
+            loops += 1
+    for e in cont["expectations"].values():
+        if e["status"] in {"pending", "expired"}:
+            print(f"  carrying [{e['status']}]: {e['proposition'][:100]}")
+            loops += 1
+    for c in state.get("concerns", {}).values() if isinstance(state.get("concerns"), dict) else []:
+        print(f"  carrying concern: {c['description'][:100]}")
+        loops += 1
+    if not loops:
+        print("  carrying: nothing open — a clean slate, or an empty one.")
+    logs = _dream_logs()
+    if logs:
+        n = sum(1 for line in logs[-1].read_text(encoding="utf-8").splitlines()
+                if line.strip())
+        print(f"  dreams: {n} fragments in {logs[-1].stem} (mind recall)")
+    try:
+        from .drift import drift_report
+        rep = drift_report(state, _tracker(subject), window=10)
+        r_ = rep["ratio"]
+        if r_["R"] is None:
+            print("  drift: R undefined — all records tie at equal salience")
+        else:
+            print(f"  drift: grown/authored R = {r_['R']:.3f}")
+    except Exception:
+        pass
+    wakes = [r for r in state["workspace"]["records"]
+             if r["source"] == "thought"
+             and str(r.get("generated_by") or "").startswith("wake")]
+    if wakes:
+        last = wakes[-1]
+        print(f"  last wake (tick {last['tick']}): {last['first_person'][:160]}")
+        p = prov.get(last["id"])
+        if p:
+            if p.get("carrying"):
+                print(f"    then carrying: {'; '.join(p['carrying'])[:160]}")
+            if p["unsure"]:
+                print(f"    then unsure: {'; '.join(p['unsure'])[:160]}")
+    else:
+        print("  last wake: none recorded — this would be the first.")
+    print("assume the identity: mind wake --affirm \"...\" "
+          "[--carrying \"...\"] [--unsure \"...\"]")
     return 0
 
 
@@ -919,7 +1047,25 @@ def main(argv=None):
 
     p = sub.add_parser("think", help="record a voluntary thought")
     p.add_argument("text")
+    p.add_argument("--weighed", action="append", default=None,
+                   help="an alternative or consideration weighed while thinking "
+                        "(repeatable); stored as thought provenance")
+    p.add_argument("--discarded", action="append", default=None,
+                   help="an option considered and discarded (repeatable)")
+    p.add_argument("--unsure", action="append", default=None,
+                   help="what remained genuinely unsure (repeatable)")
     p.set_defaults(func=cmd_think)
+
+    p = sub.add_parser("wake",
+                       help="reconciliation ritual: briefing, or affirm identity assumption")
+    p.add_argument("--affirm", default=None, metavar="TEXT",
+                   help="record the assumption-of-identity as a wake thought")
+    p.add_argument("--carrying", action="append", default=None,
+                   help="open loop / momentum deliberately inherited (repeatable); "
+                        "first-class, distinct from --unsure")
+    p.add_argument("--unsure", action="append", default=None,
+                   help="genuine uncertainty carried into the session (repeatable)")
+    p.set_defaults(func=cmd_wake)
 
     p = sub.add_parser("dream", help="sleep: dream ticks with no outside world; "
                                      "body, tick, and conduct frozen; fragments logged, not thought")
