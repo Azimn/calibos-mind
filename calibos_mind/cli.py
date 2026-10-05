@@ -17,7 +17,7 @@ indefinitely. Quick reference:
     mind resolve <id> [--released]     close a commitment (done, or released)
     mind status [--raw]              tick, felt need bands (exact floats under --raw), open loops, inbox depth
     mind review [n]                    recent private thoughts
-    mind drift [--window N]            persona-drift signals (grown/authored salience, trigger KL)
+    mind drift [--window N]            persona-drift signals (grown salience share, trigger KL)
     mind consolidate [--list]          dry-run consolidation scan (read-only); dedup/supersede/flag proposals to journal
     mind consolidate --accept <id>...  accept proposal(s): archive losers with written reasons
     mind consolidate --reject <id> --reason "..."
@@ -852,7 +852,7 @@ def cmd_wake(args):
         if r_["R"] is None:
             print("  drift: R undefined — all records tie at equal salience")
         else:
-            print(f"  drift: grown/authored R = {r_['R']:.3f}")
+            print(f"  drift: grown-salience share R = {r_['R']:.3f}")
     except Exception:
         pass
     wakes = [r for r in state["workspace"]["records"]
@@ -990,9 +990,9 @@ def cmd_drift(args):
     r = rep["ratio"]
     print(f"drift (tick {rep['tick']}, {rep['n_records']} records) — read-only")
     if r["R"] is None:
-        print("grown/authored salience ratio R: undefined — all records tie at equal salience")
+        print("grown salience share R: undefined — all records tie at equal salience")
     else:
-        print(f"grown/authored salience ratio R = {r['R']:.3f}")
+        print(f"grown salience share R = {r['R']:.3f}")
     print(f"  grown:    {r['n_grown']:>3} records, salience {r['grown_salience']:.3f}")
     print(f"  authored: {r['n_authored']:>3} records, salience {r['authored_salience']:.3f} "
           f"(cartridge: identity root + seeds)")
@@ -1210,7 +1210,7 @@ def main(argv=None):
     p.add_argument("n", type=int, nargs="?", default=5)
     p.set_defaults(func=cmd_review)
 
-    p = sub.add_parser("drift", help="persona-drift signals: grown/authored salience ratio + trigger-histogram KL")
+    p = sub.add_parser("drift", help="persona-drift signals: grown salience share + trigger-histogram KL")
     p.add_argument("--window", type=int, default=10,
                    help="recent-trigger window size for the KL (default 10)")
     p.set_defaults(func=cmd_drift)

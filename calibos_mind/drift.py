@@ -6,7 +6,7 @@ distributions we actually have instead of a hardcoded trait vector
 deterministic signals, zero new models, zero new persistent state,
 zero new schedules.
 
-1. Grown/authored salience ratio
+1. Grown-salience share
    R = sum(salience of grown records) / sum(salience of all records).
    Authored = records stamped generated_by="cartridge" — the identity
    root and the seed memories, i.e. the hand-authored content. Grown =

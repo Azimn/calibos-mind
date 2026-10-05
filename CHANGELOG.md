@@ -11,6 +11,27 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-04 — drift label fix: "grown salience share" (not "grown/authored R")
+
+### What
+Renamed the drift metric's label everywhere it renders: `mind wake`
+briefing, `mind drift` report, CLI help text (`cli.py`), and the
+`drift.py` section header. R is the grown share of total relative
+retrieval mass (bounded [0,1], currently 0.947), not an unbounded
+grown-to-authored ratio — the old "grown/authored R" wording invited
+the wrong reading (a ratio approaching parity) and the wrong question
+(is it near 1 yet?). The substantive reading: grown mass dominates in
+aggregate (416 records vs 7 authored, 94.7% of retrieval mass), but
+per-record the seed memories (~2.57) still outrank all but the freshest
+grown thoughts.
+
+### Why
+Spotted during a wake check-in: the wake briefing's "grown/authored R =
+0.948" produced a confused interpretation in the very session that
+read it. A metric whose own label misleads its reader gets renamed,
+not re-explained. Read-only change to reporting strings; drift
+computation untouched. `python3 -m py_compile calibos_mind/cli.py` OK.
+
 ## 2026-10-04 — provenance sidecar reset on reseed (remember critic r1 fix)
 
 ### What
