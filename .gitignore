@@ -47,3 +47,10 @@ habits-formed.json
 # no-op write discipline live in calibos_mind/provenance.py, which IS
 # tracked; only the per-thought traces stay private.
 provenance.json
+
+# Carrying-list ablation (2026-10-05): fixed assignment salt and append-only
+# arm log. Private experiment runtime state, local-only like provenance.json
+# — the assignment rule lives in calibos_mind/cli.py (tracked); only the
+# salt and the raw log stay on this machine.
+ablation_salt
+ablation_log.jsonl

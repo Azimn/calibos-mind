@@ -43,7 +43,10 @@ class CliOnTmp:
                    "DREAMS": self.tmp / "dreams",
                    "SALIENCE": self.tmp / "salience.json",
                    "INTEROCEPTION": self.tmp / "interoception.json",
-                   "PROVENANCE": self.tmp / "provenance.json"}
+                   "PROVENANCE": self.tmp / "provenance.json",
+                   "WAKE_LIVENESS": self.tmp / "wake_liveness.json",
+                   "ABLATION_SALT_FILE": self.tmp / "ablation_salt",
+                   "ABLATION_LOG": self.tmp / "ablation_log.jsonl"}
         for name, path in targets.items():
             self.saved[name] = getattr(cli, name)
             setattr(cli, name, path)

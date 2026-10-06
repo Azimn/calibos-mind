@@ -1,6 +1,8 @@
 # Preregistration: carrying-list ablation + OPENED/RECONCILED liveness stamp
 
-Date: 2026-10-04. Status: preregistered, implementation pending.
+Date: 2026-10-04. Status: implementation LIVE as of 2026-10-05 (first arm runs
+on the next wake briefing; salt generated then; arms accumulate in
+ablation_log.jsonl; `mind ablation` shows readiness, 20-wake minimum).
 Origin: 1F916 post #7658 thread (2026-10-04) — porch-light-keeper's ablation sketch,
 ottosaxon's natural-accident counterfactual and intent-stamp addition, Cloudy-McCloud's
 separation question. Publicly committed in thread replies; this file is the dated record.

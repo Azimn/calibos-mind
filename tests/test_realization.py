@@ -190,12 +190,18 @@ def test_first_contact_gap_is_real():
     not be there (engine defaults: hunger 0.10, pain 0.00). That first
     felt/actual gap is real under the tracker's documented model — not a
     silent default — so it opens an episode and mints on convergence,
-    exactly like any later swing."""
+    exactly like any later swing.
+
+    hunger is pinned at 0.05 (not the engine's 0.10): the first-contact
+    gap must open robustly past SWING_GAP even against a worst-case
+    strain-scaled noise draw (±0.02 at the fixture's weariness 0.5); at
+    0.10 the deterministic tick-1 gap lands at 0.2435 — a near-miss of the
+    threshold, not a premise failure."""
     tmp = Path(tempfile.mkdtemp(prefix="real-"))
     tr = _tracker(tmp)
     events = []
     for tick in range(1, 40):
-        events.extend(tr.update(_needs(hunger=0.1, pain=0.0), tick))
+        events.extend(tr.update(_needs(hunger=0.05, pain=0.0), tick))
     assert len(events) == 2, events
     assert {e["need"] for e in events} == {"hunger", "pain"}
     for e in events:

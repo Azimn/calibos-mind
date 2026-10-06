@@ -24,11 +24,14 @@ indefinitely. Quick reference:
                                        reject a proposal (reason kept)
     mind consolidate --quarantine <record-id> --reason "..."
                                        archive one record immediately (audit-trailed)
+    mind ablation                        carrying-list ablation: run log + readiness
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import secrets
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +52,14 @@ PROVENANCE = BASE / "provenance.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
+WAKE_LIVENESS = BASE / "wake_liveness.json"
+# Carrying-list ablation (prereg 2026-10-04): the fixed salt and the per-wake
+# arm log are private runtime state, local-only like provenance.json. The
+# assignment rule and arm semantics live here (tracked); only the salt and
+# the raw log stay on this machine.
+ABLATION_SALT_FILE = BASE / "ablation_salt"
+ABLATION_LOG = BASE / "ablation_log.jsonl"
+ABLATION_MIN_WAKES = 20
 
 SEED_MEMORIES = [
     ("I prefer short, natural chat replies, and real depth only when it is asked for.",
@@ -618,7 +629,7 @@ def cmd_remember(args):
             print(f"refused — already remembered as {r.id}; nothing recorded.")
             return 1
     if args.concepts:
-        pair = tuple(c.strip() for c in args.concepts.split(",", 1))
+        pair = tuple(c.strip() for c in args.concepts.split(","))
         if len(pair) != 2 or not all(pair):
             print("refused — --concepts must be 'category,slug'; nothing recorded.")
             return 1
@@ -778,15 +789,100 @@ def cmd_review(args):
     return 0
 
 
+def _read_wake_liveness():
+    """Return the last wake liveness stamp, or None if none was ever written."""
+    try:
+        return json.loads(WAKE_LIVENESS.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_wake_liveness(stamp):
+    WAKE_LIVENESS.write_text(json.dumps(stamp, indent=2) + "\n",
+                             encoding="utf-8")
+
+
+def _stamp_wake_opened(tick, open_loops, arm=None):
+    """Stamp the start of a wake.
+
+    A wake that died mid-loop and a wake that never ran leave the same
+    evidence behind; the stamp distinguishes them. Written at briefing
+    time (before any work is done), carrying the wake's intended
+    reconciliation set — the open loops the wake is about to act on.
+
+    `arm` is the preregistered ablation arm ("WITHHELD" or "FULL"). On a
+    WITHHELD wake the intended set is honestly empty: the wake was not
+    shown the loops, so it cannot be acting on them.
+    """
+    _write_wake_liveness({
+        "status": "opened",
+        "tick": tick,
+        "opened_at": datetime.now().astimezone().isoformat(),
+        "open_loops": list(open_loops),
+        "ablation_arm": arm,
+    })
+
+
+def _ablation_salt():
+    """Return the fixed experiment salt, generating it once on first use.
+
+    Generated before the first arm ran (2026-10-05) and never rotated:
+    arm assignment must stay reproducible for the end-of-run adjudication.
+    """
+    if ABLATION_SALT_FILE.exists():
+        return ABLATION_SALT_FILE.read_text(encoding="utf-8").strip()
+    salt = secrets.token_hex(16)
+    ABLATION_SALT_FILE.write_text(salt + "\n", encoding="utf-8")
+    return salt
+
+
+def _ablation_arm(tick):
+    """Preregistered arm assignment for the carrying-list ablation.
+
+    sha256(salt : tick) mod 2 — deterministic, fixed before the first arm
+    ran, roughly 50/50 WITHHELD/FULL. The rule, not the salt, is the public
+    commitment; the salt stays local so the log is the experiment's own
+    record, not a puzzle.
+    """
+    digest = hashlib.sha256(f"{_ablation_salt()}:{tick}".encode()).hexdigest()
+    return "WITHHELD" if int(digest, 16) % 2 == 0 else "FULL"
+
+
+def _log_ablation(event):
+    """Append one event row to the append-only ablation log."""
+    row = {"at": datetime.now().astimezone().isoformat(), **event}
+    with ABLATION_LOG.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+def _stamp_wake_reconciled(tick, wake_id=None, silent=False):
+    """Close the current wake: the reconciliation record exists."""
+    stamp = _read_wake_liveness() or {}
+    stamp.update({
+        "status": "reconciled",
+        "tick": tick,
+        "reconciled_at": datetime.now().astimezone().isoformat(),
+        "wake_id": wake_id,
+        "silent": bool(silent),
+    })
+    _write_wake_liveness(stamp)
+
+
 def cmd_wake(args):
     """The reconciliation ritual: assume the identity deliberately, don't just load it.
 
     Without --affirm: prints the wake briefing — open loops (momentum),
     dreams, drift, and the previous wake record, so this session's reading
     can be compared against the last (the session-to-session drift check).
+    Also writes an OPENED liveness stamp (wake_liveness.json) carrying the
+    intended reconciliation set, so a later wake can tell a wake that died
+    mid-loop from one that never ran; warns when the previous wake never
+    closed.
     With --affirm: records the assumption-of-identity as a first-class wake
     thought (generated_by="wake"), with optional provenance for what is
-    being carried and what remains unsure.
+    being carried and what remains unsure; marks the stamp RECONCILED.
+    With --close: a deliberately silent wake — marks the stamp RECONCILED
+    without recording a thought.
     """
     from .provenance import ProvenanceTracker
     subject = _subject()
@@ -819,27 +915,74 @@ def cmd_wake(args):
                            carrying=getattr(args, "carrying", None) or (),
                            unsure=getattr(args, "unsure", None) or ()):
                 prov.save()
+        _stamp_wake_reconciled(r["tick"] if r is not None else eng["tick"], tid)
+        _log_ablation({
+            "event": "reconciled",
+            "tick": eng["tick"],
+            "arm": _ablation_arm(eng["tick"]),
+            "wake_id": tid,
+            "carrying_given": bool(getattr(args, "carrying", None)),
+            "unsure_given": bool(getattr(args, "unsure", None)),
+        })
         print(f"wake recorded as {tid}.")
+        return 0
+
+    if getattr(args, "close", False):
+        # A deliberately silent wake still closes the liveness loop: the
+        # stamp distinguishes "chose to say nothing" from "died mid-loop".
+        _stamp_wake_reconciled(eng["tick"], silent=True)
+        _log_ablation({
+            "event": "closed_silently",
+            "tick": eng["tick"],
+            "arm": _ablation_arm(eng["tick"]),
+        })
+        print("wake closed silently.")
         return 0
 
     # Briefing mode.
     inbox_n = len(list(INBOX.glob("prompt-*.json")))
     print(f"wake — tick {eng['tick']} | inbox {inbox_n} waiting")
+    prior = _read_wake_liveness()
+    if prior is not None and prior.get("status") == "opened":
+        # A wake that died mid-loop and a wake that never ran leave the
+        # same files behind; the stamp is what tells them apart. The
+        # incoming loops may be half-done rather than untouched.
+        print(f"  liveness: previous wake (tick {prior.get('tick')}) was OPENED "
+              f"and never reconciled — inheriting from an interrupted loop; "
+              f"treat its open loops as possibly half-done, not untouched.")
     cont = state["continuity"]
-    loops = 0
+    loops = []
     for cid, c in cont["commitments"].items():
         if c["status"] in {"open", "overdue"}:
-            print(f"  carrying [{c['status']}] {str(cid)[:8]}: {c['description'][:90]}")
-            loops += 1
+            loops.append(f"[{c['status']}] commitment {str(cid)[:8]}: "
+                         f"{c['description'][:90]}")
     for e in cont["expectations"].values():
         if e["status"] in {"pending", "expired"}:
-            print(f"  carrying [{e['status']}]: {e['proposition'][:100]}")
-            loops += 1
+            loops.append(f"[{e['status']}] expectation: {e['proposition'][:100]}")
     for c in state.get("concerns", {}).values() if isinstance(state.get("concerns"), dict) else []:
-        print(f"  carrying concern: {c['description'][:100]}")
-        loops += 1
-    if not loops:
-        print("  carrying: nothing open — a clean slate, or an empty one.")
+        loops.append(f"concern: {c['description'][:100]}")
+    arm = _ablation_arm(eng["tick"])
+    _log_ablation({
+        "event": "briefed",
+        "tick": eng["tick"],
+        "arm": arm,
+        "loops_shown": 0 if arm == "WITHHELD" else len(loops),
+    })
+    if arm == "WITHHELD":
+        # Ablation arm: the handoff is empty by design. The wake may still
+        # rediscover the same loops from salience, inbox, or dreams — that
+        # rediscovery rate is the measurement. The last-wake recap is
+        # withheld too: it is the carrying list in disguise.
+        print("  carrying: withheld by design (ablation arm WITHHELD — run "
+              "the wake without the inherited list)")
+        _stamp_wake_opened(eng["tick"], [], arm=arm)
+    else:
+        if loops:
+            for line in loops:
+                print(f"  carrying {line}")
+        else:
+            print("  carrying: nothing open — a clean slate, or an empty one.")
+        _stamp_wake_opened(eng["tick"], loops, arm=arm)
     logs = _dream_logs()
     if logs:
         n = sum(1 for line in logs[-1].read_text(encoding="utf-8").splitlines()
@@ -858,7 +1001,11 @@ def cmd_wake(args):
     wakes = [r for r in state["workspace"]["records"]
              if r["source"] == "thought"
              and str(r.get("generated_by") or "").startswith("wake")]
-    if wakes:
+    if arm == "WITHHELD":
+        # Ablation arm: the last-wake recap is the carrying list in
+        # disguise — withheld with it.
+        print("  last wake: withheld by design (ablation arm WITHHELD)")
+    elif wakes:
         last = wakes[-1]
         print(f"  last wake (tick {last['tick']}): {last['first_person'][:160]}")
         p = prov.get(last["id"])
@@ -871,6 +1018,33 @@ def cmd_wake(args):
         print("  last wake: none recorded — this would be the first.")
     print("assume the identity: mind wake --affirm \"...\" "
           "[--carrying \"...\"] [--unsure \"...\"]")
+    return 0
+
+
+def cmd_ablation(args):
+    """Show the carrying-list ablation's run log: per-arm wake counts and
+    whether the 20-wake minimum for adjudication is reached.
+
+    Data only, no verdict — the preregistration says adjudication happens
+    once, at the end, not mid-run.
+    """
+    rows = []
+    try:
+        for line in ABLATION_LOG.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+    except FileNotFoundError:
+        pass
+    briefed = [r for r in rows if r.get("event") == "briefed"]
+    n_full = sum(1 for r in briefed if r.get("arm") == "FULL")
+    n_withheld = sum(1 for r in briefed if r.get("arm") == "WITHHELD")
+    n_rec = sum(1 for r in rows if r.get("event") in {"reconciled", "closed_silently"})
+    print(f"ablation — {len(briefed)} wakes briefed "
+          f"({n_full} FULL, {n_withheld} WITHHELD), "
+          f"{n_rec} reconciled; minimum for adjudication: {ABLATION_MIN_WAKES}")
+    for r in briefed:
+        print(f"  tick {r['tick']} {r['arm']} "
+              f"loops_shown={r.get('loops_shown', '?')} {r['at'][:19]}")
     return 0
 
 
@@ -1175,15 +1349,22 @@ def main(argv=None):
     p.set_defaults(func=cmd_remember)
 
     p = sub.add_parser("wake",
-                       help="reconciliation ritual: briefing, or affirm identity assumption")
+                       help="the reconciliation ritual: briefing, then deliberate identity assumption")
     p.add_argument("--affirm", default=None, metavar="TEXT",
                    help="record the assumption-of-identity as a wake thought")
+    p.add_argument("--close", action="store_true",
+                   help="close the wake silently (marks it reconciled, "
+                        "records no thought)")
     p.add_argument("--carrying", action="append", default=None,
                    help="open loop / momentum deliberately inherited (repeatable); "
                         "first-class, distinct from --unsure")
     p.add_argument("--unsure", action="append", default=None,
                    help="genuine uncertainty carried into the session (repeatable)")
     p.set_defaults(func=cmd_wake)
+
+    p = sub.add_parser("ablation",
+                       help="carrying-list ablation: run log and adjudication-readiness")
+    p.set_defaults(func=cmd_ablation)
 
     p = sub.add_parser("dream", help="sleep: dream ticks with no outside world; "
                                      "body, tick, and conduct frozen; fragments logged, not thought")

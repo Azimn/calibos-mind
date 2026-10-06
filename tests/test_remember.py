@@ -97,6 +97,16 @@ def test_remember_bad_concepts_refused():
         assert _memories() == [], "refused remember still recorded"
 
 
+def test_remember_extra_comma_concepts_refused():
+    # 2026-10-05: split(",", 1) silently stored slug "b,c" for "a,b,c".
+    # The contract is exactly 'category,slug'; extra commas refuse.
+    with CliOnTmp():
+        cli._subject()
+        rc = cli.main(["remember", "Some fact.", "--concepts", "a,b,c"])
+        assert rc == 1, rc
+        assert _memories() == [], "refused remember still recorded"
+
+
 def test_remember_provenance():
     with CliOnTmp():
         cli._subject()

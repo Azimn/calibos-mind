@@ -129,8 +129,12 @@ def test_first_contact_starts_at_baseline():
     assert tr.data["needs"] == {}
     tr.update(_needs(hunger=0.9), 1)
     felt = tr.data["needs"]["hunger"]["felt"]
-    # One onset step from baseline: 0.5 + 0.4*0.35 + noise.
-    assert abs(felt - (0.5 + 0.4 * 0.35)) <= 0.011, felt
+    # One onset step from baseline: 0.5 + 0.4*0.35 + noise. The _needs()
+    # fixture is half-weary (fatigue 0.5, weariness 0.5), so under
+    # strain-scaled noise (domain 11) the bound is 2*NOISE_SCALE, not the
+    # pristine 0.01 — the premise (starts at baseline, chases, never
+    # jumps) is unchanged, only the noise bound moved.
+    assert abs(felt - (0.5 + 0.4 * 0.35)) <= 0.021, felt
     assert tr.data["needs"]["hunger"]["last_tick"] == 1
 
 

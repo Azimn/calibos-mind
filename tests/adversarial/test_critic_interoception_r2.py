@@ -493,14 +493,23 @@ def test_r2_noise_floor_bounds_pinned_baseline_wander():
     fitness horizon, default seed. The max |felt - 0.5| must stay within the
     floor — otherwise pure seeded jitter renders felt bands, and the floor
     does not do what its own documentation claims.
+
+    The body is pinned RESTED (weariness 0: fatigue 0.0, focus 1.0) — the
+    floor's derivation assumes the pristine noise scale. Under
+    strain-scaled noise (domain 11, 2026-10-05) an all-0.5 body is
+    half-weary (weariness 0.5) and legitimately wanders past the floor;
+    that is the mutation working, not the floor failing. Wander is
+    measured on the baseline-pinned keys only.
     """
     tmp = Path(tempfile.mkdtemp(prefix="critic-r2-floor-"))
     tr = InteroceptionTracker(tmp / "i.json")
-    keys = ["hunger", "thirst", "fatigue", "energy"]
+    pinned = ["hunger", "thirst", "energy"]
+    actuals = {k: 0.5 for k in pinned}
+    actuals.update({"fatigue": 0.0, "focus": 1.0})  # weariness 0
     maxdev = 0.0
     for tick in range(1, 26):
-        tr.update({k: 0.5 for k in keys}, tick)
-        for k in keys:
+        tr.update(dict(actuals), tick)
+        for k in pinned:
             maxdev = max(maxdev, abs(tr.data["needs"][k]["felt"] - 0.5))
     assert maxdev <= BAND_NOISE_FLOOR, (
         f"pinned-baseline jitter wander {maxdev:.4f} exceeds the "
@@ -511,15 +520,23 @@ def test_r2_noise_floor_bounds_pinned_baseline_wander():
 def test_r2_calm_body_stays_all_settled_over_time():
     """A body pinned at baseline is genuinely settled: felt_bands() must not
     flicker bands from pure seeded jitter over a long calm run. (Steady-state
-    jitter sigma is ~0.012; a 0.02 floor is breached ~11% of samples.)"""
+    jitter sigma is ~0.012; a 0.02 floor is breached ~11% of samples.)
+
+    The body is pinned RESTED (weariness 0: fatigue 0.0, focus 1.0).
+    focus=1.0 and fatigue=0.0 are genuine off-baseline actuals, so they
+    render real bands; the assertion is on the baseline-pinned keys —
+    none of them may flicker a band from pure seeded jitter.
+    """
     tmp = Path(tempfile.mkdtemp(prefix="critic-r2-calm-"))
     tr = InteroceptionTracker(tmp / "i.json")
-    keys = ["hunger", "thirst", "fatigue", "energy"]
+    pinned = ["hunger", "thirst", "energy"]
+    actuals = {k: 0.5 for k in pinned}
+    actuals.update({"fatigue": 0.0, "focus": 1.0})  # weariness 0
     flickers = 0
     ticks = 500
     for tick in range(1, ticks + 1):
-        tr.update({k: 0.5 for k in keys}, tick)
-        if tr.felt_bands():
+        tr.update(dict(actuals), tick)
+        if any(k in tr.felt_bands() for k in pinned):
             flickers += 1
     assert flickers == 0, (
         f"calm body rendered felt bands on {flickers}/{ticks} ticks "

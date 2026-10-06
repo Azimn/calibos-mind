@@ -22,7 +22,11 @@ Design rules:
 - Noise: ``noise_scale * (h - 0.5) * 2`` with
   ``h = sha256(f"{seed}:{tick}:{key}")`` as a float in [0, 1). No ``random``
   module state, no wall clock, no UUIDs. Same tick/need sequence ->
-  byte-identical sidecar (exact replay is a standing invariant).
+  byte-identical sidecar (exact replay is a standing invariant). The
+  effective scale is strain-scaled per tick (domain 11, 2026-10-05):
+  ``noise_scale * (1 + STRAIN_NOISE_K * weariness(actuals))`` — a rested
+  body (weariness 0) sees exactly the pristine scale; an exhausted one
+  sees up to 3x.
 - View substitution: ``CalibosWorkspace.view()`` re-renders body-derived
   interoception records (``source == "interoception"`` with a need key in
   ``concepts``) from FELT urgency using the engine's graded vocabulary and
@@ -66,11 +70,23 @@ from pathlib import Path
 
 from jelly_psiduck.firewall import LOW_IS_BAD, NEED_LANGUAGE
 
+from calibos_mind.friction import weariness
+
 BASELINE = 0.5            # physiological neutral; engine needs default here too
 RATE_ONSET = 0.35         # felt chases a rising signal fast
 RATE_OFFSET = 0.12        # a fading signal lags, like real interoception
 NOISE_SCALE = 0.01        # seeded deterministic jitter per (tick, key)
 DEFAULT_SEED = 0          # fixed: identical tick/need sequences replay byte-identical
+
+# Strain-scaled noise (domain 11, 2026-10-05): the felt-body noise grows
+# with bodily weariness (friction.weariness over the same tick's
+# actuals). Per-tick effective scale = NOISE_SCALE * (1 + K * weariness),
+# K = 2: up to 3x at full exhaustion; weariness 0 -> scale exactly 1, so
+# rested runs replay byte-identical to the pristine code. Tired organisms
+# misread their bodies; the thinker is untouched — only the interoceptive
+# signal gets noisier under strain. weariness is a pure function of the
+# actuals, so replay stays deterministic.
+STRAIN_NOISE_K = 2.0
 
 # The engine's graded thresholds, reused — never forked.
 THRESHOLDS = (0.45, 0.65, 0.85)
@@ -82,19 +98,21 @@ FELT_BANDS = ("settled", "stirring", "pressing", "urgent")
 # indistinguishable from seeded jitter — not a genuine departure, so no
 # band renders.
 #
-# Derivation (deterministic; default seed 0; keys hunger/thirst/fatigue/energy
-# pinned at the 0.5 baseline). At pinned baseline the update is an AR(1) in
-# the felt value with phi = 1 - RATE_OFFSET = 0.88: move*displaced > 0 is
-# false exactly at baseline, so the offset rate (0.12) always applies and
-# the per-tick noise is uniform in [-NOISE_SCALE, +NOISE_SCALE]. Stationary
-# sigma = (NOISE_SCALE/sqrt(3)) / sqrt(1 - 0.88^2) ≈ 0.0122. Measured
-# maxima on the default seed: 0.0297 over the 25-tick fitness horizon and
-# 0.0451 over 5000 ticks (steady state). The earlier 2*NOISE_SCALE = 0.02
-# floor was ~1.64 sigma and did not bound this wander: it was breached on
-# 11.35% of steady-state samples and rendered spurious bands on 236/500
-# ticks of a pinned-baseline calm run. The floor is 5*NOISE_SCALE = 0.05
-# (~4.1 sigma), comfortably above the measured long-horizon maximum; the
-# same 500-tick calm run renders zero bands.
+# Derivation (deterministic; default seed 0; hunger/thirst/energy pinned
+# at the 0.5 baseline, fatigue 0.0 / focus 1.0 so bodily weariness is 0 —
+# a rested body, i.e. the pristine noise scale). At pinned baseline the
+# update is an AR(1) in the felt value with phi = 1 - RATE_OFFSET = 0.88:
+# move*displaced > 0 is false exactly at baseline, so the offset rate
+# (0.12) always applies and the per-tick noise is uniform in
+# [-NOISE_SCALE, +NOISE_SCALE]. Stationary sigma = (NOISE_SCALE/sqrt(3))
+# / sqrt(1 - 0.88^2) ≈ 0.0122. Measured maxima on the default seed:
+# 0.0297 over the 25-tick fitness horizon and 0.0451 over 5000 ticks
+# (steady state). The earlier 2*NOISE_SCALE = 0.02 floor was ~1.64 sigma
+# and did not bound this wander: it was breached on 11.35% of steady-state
+# samples and rendered spurious bands on 236/500 ticks of a pinned-baseline
+# calm run. The floor is 5*NOISE_SCALE = 0.05 (~4.1 sigma), comfortably
+# above the measured long-horizon maximum; the same 500-tick calm run
+# renders zero bands.
 #
 # What the floor provides (under the pinned default seed and validated
 # horizons): on a pinned-baseline body, felt_bands() is empty — "all
@@ -104,6 +122,14 @@ FELT_BANDS = ("settled", "stirring", "pressing", "urgent")
 # it bounds the *displayed* flicker, so seeded noise never reads as a felt
 # movement in `mind status` until a departure exceeds ~4 sigma of the
 # stationary jitter.
+#
+# Strain interaction (domain 11, 2026-10-05): the derivation above assumes
+# the pristine noise scale, i.e. weariness 0 (a rested body). Under strain
+# the effective scale grows (up to 3x), so a tired body pinned at baseline
+# can wander past the floor and render bands — that is the mutation
+# working (tired organisms misread their bodies), not a defect. The floor
+# is deliberately NOT strain-scaled: scaling the display threshold up with
+# weariness would hide exactly the misreading the taxonomy checks demand.
 BAND_NOISE_FLOOR = 5 * NOISE_SCALE
 
 # Realization episodes (domain 10: delayed emotional realization).
@@ -283,6 +309,12 @@ class InteroceptionTracker:
         params = self.data["params"]
         seed = self.data["seed"]
         swing = self.data["realization"]["swing"]
+        # Strain-scaled noise (domain 11): this tick's effective noise
+        # scale grows with bodily weariness (pure function of the same
+        # actuals — deterministic, replay-exact). Computed once per tick,
+        # not per need: weariness is a body-level property.
+        noise_scale_eff = params["noise_scale"] * (
+            1.0 + STRAIN_NOISE_K * weariness(actuals))
         closed: list[dict] = []
         for key in sorted(actuals):
             a = float(actuals[key])
@@ -298,7 +330,7 @@ class InteroceptionTracker:
             displaced = f - BASELINE
             onset = (move * displaced > 0) or (displaced == 0 and move != 0)
             rate = params["rate_onset"] if onset else params["rate_offset"]
-            n = _noise(seed, tick, key, params["noise_scale"])
+            n = _noise(seed, tick, key, noise_scale_eff)
             felt = round(min(1.0, max(0.0, f + move * rate + n)), 6)
             entry["felt"] = felt
             entry["last_tick"] = tick
