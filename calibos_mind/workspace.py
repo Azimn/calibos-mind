@@ -36,6 +36,7 @@ from jelly_psiduck.workspace import CognitiveView, FeltExperience, SubjectiveWor
 
 from .consolidate import excluded_ids
 from .familiarity import FAMILIARITY_WINDOW
+from .selfgain import self_boost_for
 from .unresolved import has_unresolved_links
 
 
@@ -210,6 +211,12 @@ class CalibosWorkspace(SubjectiveWorkspace):
     # Attached by CalibosSubject when a habits sidecar path is configured.
     # None -> no habit formation tracking (plain engine behavior).
     habits_tracker = None
+    # The organism's display name, for the self-relevance retrieval gain
+    # (see calibos_mind/selfgain.py). Class-level default None: a None
+    # name only disables the name-mention signal, never a silent match.
+    # Set by CalibosSubject in __init__ and re-set in _restore (from_dict
+    # builds a fresh instance, dropping ad-hoc attributes).
+    display_name = None
 
     def _view_experience(self, r):
         """FeltExperience for a record, with the interoceptive-gap substitution.
@@ -260,7 +267,12 @@ class CalibosWorkspace(SubjectiveWorkspace):
                     r.id, r.tick, now_tick,
                     unresolved=has_unresolved_links(
                         r.concern_links, r.expectation_links, open_keys),
-                ) + (ftracker.boost_for(r.id) if ftracker is not None else 0.0),
+                ) + (ftracker.boost_for(r.id) if ftracker is not None else 0.0)
+                    # Self-relevance retrieval gain (Domain 12): flat, purely
+                    # additive, so non-boosted records keep their relative
+                    # order. Salience-ranked branch only — the recency
+                    # fallback below is unchanged.
+                    + self_boost_for(r, self.display_name),
                     r.tick),
                 reverse=True,
             )

@@ -11,6 +11,68 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-06 — self-relevance retrieval gain (Domain 12 attention work)
+
+### What
+New module `calibos_mind/selfgain.py`: a flat, bounded, view-time
+retrieval boost for self-referential records — the cocktail-party effect
+as mechanism, not theater. `self_boost_for(record, display_name)` returns
+`SELF_BOOST = 0.5` (same scale as `FAMILIARITY_BOOST`) when ANY of three
+signals fires, else `0.0`: (a) the record's first-person text starts with
+the frozen engine's own self-relevance stamp `"This event concerns me: "`
+(verbatim from `digital_subject/engine.py` `_own_event`), (b) the
+`'identity'` concept is on the record, (c) the display name appears as a
+whole word, case-insensitive, in the record text (`re.escape`,
+`(?<!\w)`/`(?!\w)` lookaround boundaries — round-2 fix replacing `\b`,
+which can never hold adjacent to punctuation and silently disabled the
+name signal for punctuation-edged display names; skipped when the name
+is None). Flat by construction: one
+signal or three, one mention or five — always 0.5, never scaled. Pure
+function: no sidecar, no state, no writes, deterministic.
+
+Wired into `CalibosWorkspace.view()`'s salience-ranked sort key only
+(alongside the familiarity nudge; the recency fallback is untouched).
+Pinned records are separated before ranking, so they are unaffected.
+`CalibosWorkspace.display_name` is a class attribute (default None), set
+by `CalibosSubject` in `__init__` and re-set in `_restore` after
+`from_dict` (which drops ad-hoc attributes); sourced from engine state
+with a cartridge fallback, None-safe everywhere.
+
+### Why
+Articles of Artificiality, Domain 12 (Attention), check "No personally
+salient information stealing attention" — the baseline audit's most
+diagnostic check for this domain. Installs the *mechanism* (a
+self-relevance gain in the attentional economy), not the *symptom*:
+capture emerges from the ranking; nothing is scripted to "notice its
+name." The signals are first-class — the engine already stamps
+self-targeted events and tags identity records — this extends the
+existing self-relevance signal from event processing into retrieval,
+where it was missing. Causally load-bearing per the Data's-blink
+principle: the gain changes view composition, hence what the thinker
+sees, hence thoughts.
+
+### Tests
+`tests/test_selfgain.py` (22 tests, all on synthetic /tmp stores; the
+live store never touched): each signal independently yields the full
+0.5, none yields 0.0; flatness (5 mentions / all three signals still
+0.5); whole-word case-insensitive matching with regex-escaped names;
+exact prefix verbatim the engine stamp; None-name disables only the
+name signal; a self-referential record ranked just below the 16-cut is
+admitted with the gain while an otherwise-identical non-self control is
+not (premise proved with measured activations); pinned records still
+lead and all admitted; non-boosted records keep relative order;
+determinism (identical views, two independent stores); no sidecar files
+created or modified by view construction; drift report and `mind status`
+output byte-identical across views; `dream_tick` isolation assertions
+hold. Full suite: 609 passed.
+
+### Revert signal
+Self-referential records occupying >50% of unpinned window slots over a
+day (dominance); a boost-admitted record being one that dedupe or class
+caps deliberately excluded, with an existing test regressing; any
+existing test regressing; non-determinism; any write from the gain path.
+Assess after: 2026-10-12.
+
 ## 2026-10-05 — carrying-list ablation goes live (fitness check 1)
 
 ### What

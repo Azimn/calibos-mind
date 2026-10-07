@@ -50,6 +50,11 @@ class CalibosSubject(EndogenousSubject):
         # rebuilt by _restore. Normalize both to CalibosWorkspace.
         if not isinstance(self.workspace, CalibosWorkspace):
             self.workspace = CalibosWorkspace.from_dict(self.workspace.to_dict())
+        # The self-relevance retrieval gain's name-mention signal (see
+        # calibos_mind/selfgain.py) needs the organism's display name on
+        # the workspace. Sourced from engine state (survives restore)
+        # with a cartridge fallback; None disables only that signal.
+        self.workspace.display_name = self._resolve_display_name()
         self._attach_salience()
         self._attach_interoception()
         self._attach_familiarity()
@@ -142,7 +147,25 @@ class CalibosSubject(EndogenousSubject):
         if stranded:
             self.workspace.ambivalence_tracker._pending = stranded
         self._attach_habits()
+        # from_dict builds a fresh CalibosWorkspace, dropping ad-hoc
+        # attributes — re-set the display name (see __init__).
+        self.workspace.display_name = self._resolve_display_name()
         self.trigger = {"kind": "none", "parents": [], "depth": 0}
+
+    def _resolve_display_name(self):
+        """The organism's display name for the self-relevance gain.
+
+        Primary source is engine state (restored from the store, so it is
+        available post-_restore); the cartridge is the fallback. Empty or
+        missing -> None, which disables only the name-mention signal.
+        """
+        engine = getattr(self, "engine", None)
+        name = getattr(getattr(engine, "state", None), "display_name", None)
+        if not name:
+            cartridge = getattr(self, "cartridge", None)
+            name = getattr(cartridge, "display_name", None)
+        name = (name or "").strip()
+        return name or None
 
     def _add(self, source, text, **metadata):
         if getattr(self, "_dreaming", False) and source == "thought":
