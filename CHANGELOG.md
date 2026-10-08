@@ -11,6 +11,48 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-08 — seek_contact streak adjudicated; host-feeder mutation spec filed
+
+### What
+No code/config/cartridge change — a probe and a spec. The 02:06 wake ran
+the experiment a prior session proposed ("is seek_contact with zero
+triggers real orientation or the default appetite at rest?") and filed
+`proposals/2026-10-08-host-feeder-food-drink.md` for the builder/critic
+loop, ahead of today's fitness-window close.
+
+### Findings (probe: 12 heartbeat ticks, 475–486, live store)
+- The streak is neither orientation nor rest-appetite: it is the
+  deterministic head-of-channel default of a pinned drive. Dominant need
+  was `hunger` at 1.0 on all 12 ticks (dominant pressure `attachment`
+  0.8 loses the p >= n + 0.12 deadband); NEED_ACTIONS maps hunger,
+  thirst, AND loneliness to SEEK_CONTACT first.
+- `triggers=[]` in the heartbeat trace was the wrong lens throughout —
+  it tracks inbox events, not selection inputs.
+- `[[activities]]` is narration-only for heartbeat ticks
+  (`finish_silent_activity`); selection reads NEED_ACTIONS (frozen
+  engine) + habits. The proposed "seed a task into the tick
+  environment" probe was therefore unexecutable as stated — corrected
+  model recorded in the spec.
+- The habits loop is working as designed: `formed:hunger:seek_contact`
+  (0.55, 11 co-fires since tick 469) and `formed:thirst:seek_contact`
+  (0.53, 7 co-fires) crystallized from the repetition, both below the
+  0.65 fire threshold. It is chasing a constant.
+
+### The ratchet
+Hunger (+0.0020/tick) and thirst (+0.0025/tick) rise forever: no
+`[[activities]]` entry reduces them, and the engine's `food`/`drink`
+event channels (`EVENT_RULES`: hunger −0.35, thirst −0.40) are never
+emitted by anything in `calibos_mind/`. Conduct selection is degenerate
+to a near-constant, and the forming habits will harden it past 0.65.
+
+### Spec
+Host-layer feeder emitting food/drink events on a slow tick-count
+rhythm (waking ticks only, deterministic, frozen engine and cartridge
+untouched — no fingerprint migration). Rejected: cartridge
+`need_effects` (narratively dishonest) and doing nothing (habit
+lock-in). Fitness function, revert signal, and assess_after 2026-10-15
+in the spec; implementation goes through the loop, not around it.
+
 ## 2026-10-06 — self-relevance retrieval gain (Domain 12 attention work)
 
 ### What
