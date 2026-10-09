@@ -502,13 +502,14 @@ def _patched_cli(tmp: Path):
     ambivalence = tmp / "ambivalence.json"
     proposals = tmp / "proposals"
     archive = tmp / "archive"
+    provenance = tmp / "provenance.json"
     saved = (cli.DB, cli.INBOX, cli.HABITS, cli.SALIENCE, cli.INTEROCEPTION,
-             cli.FAMILIARITY, cli.AMBIVALENCE, cli.PROPOSALS, cli.ARCHIVE,
+             cli.FAMILIARITY, cli.AMBIVALENCE, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE,
              cli._subject)
     (cli.DB, cli.INBOX, cli.HABITS, cli.SALIENCE, cli.INTEROCEPTION,
-     cli.FAMILIARITY, cli.AMBIVALENCE, cli.PROPOSALS,
+     cli.FAMILIARITY, cli.AMBIVALENCE, cli.PROVENANCE, cli.PROPOSALS,
      cli.ARCHIVE) = (db, inbox, habits, salience, interoception,
-                     familiarity, ambivalence, proposals, archive)
+                     familiarity, ambivalence, provenance, proposals, archive)
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -527,7 +528,7 @@ def _patched_cli(tmp: Path):
 
 def _restore_cli(saved):
     (cli.DB, cli.INBOX, cli.HABITS, cli.SALIENCE, cli.INTEROCEPTION,
-     cli.FAMILIARITY, cli.AMBIVALENCE, cli.PROPOSALS, cli.ARCHIVE,
+     cli.FAMILIARITY, cli.AMBIVALENCE, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE,
      cli._subject) = saved
 
 

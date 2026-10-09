@@ -56,6 +56,8 @@ class CliOnTmp:
                    "INTEROCEPTION": self.tmp / "interoception.json",
                    "HABITS": self.tmp / "habits-formed.json",
                    "AMBIVALENCE": self.tmp / "ambivalence.json",
+                   "FAMILIARITY": self.tmp / "familiarity.json",
+                   "PROVENANCE": self.tmp / "provenance.json",
                    "ARCHIVE": self.tmp / "archive",
                    "PROPOSALS": self.tmp / "proposals"}
         for name, path in targets.items():

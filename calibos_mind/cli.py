@@ -222,6 +222,13 @@ def cmd_note(args):
 def _run_tick(subject):
     before = len(subject.inspect()["trace"])
     needs_before = dict(subject.engine.state.needs)
+    # Host-layer feeder (2026-10-08): slow tick-count rhythm of the frozen
+    # engine's food/drink events — waking ticks only. Enqueued before the
+    # heartbeat so the tick consumes them as external events; the engine's
+    # own EVENT_RULES do the satiation math. Never on dream ticks
+    # (dream_tick() does not come through here) or read-only commands.
+    from . import feeder as _feeder
+    _feeder.maybe_feed(subject)
     result = subject.heartbeat()
     # Ambivalence traces (2026-10-01): flush any contested-margin markers
     # the observation wrapper noted during the tick. Flushed HERE, before

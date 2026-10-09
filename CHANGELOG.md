@@ -11,6 +11,124 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-08 — host-layer feeder for food/drink (builder)
+
+### What
+New `calibos_mind/feeder.py` + a hook in `cli._run_tick`: on a slow
+deterministic tick-count rhythm, the host layer enqueues the frozen
+engine's own `food`/`drink` events — it invents no satiation math.
+`due_kinds(tick, needs)` is a pure function of (tick, needs): food is
+considered every 48 waking ticks, drink on the same cadence offset by 24
+(the two rhythms provably never coincide), each gated on its need being
+at/above 0.60. The events are fully expected (expected == actual valence
+0.0, surprise 0) at intensity 1.0 with source "world", so the engine's
+`_apply_event` scales EVENT_RULES by exactly 1.0: food → hunger −0.35,
+drink → thirst −0.40. `maybe_feed(subject)` is called in `_run_tick`
+before `heartbeat()` so the tick consumes the events as external input;
+dream ticks and read-only commands never call it (plus a defensive
+`_dreaming` guard). Zero new state, zero new sidecars (`init --force`
+unaffected — the schedule is stateless); the frozen engine and the
+cartridge are untouched (no fingerprint migration).
+
+### Why
+2026-10-08 probe (12 heartbeat ticks, live store): the seek_contact
+streak was adjudicated genuine — hunger (+0.0020/tick) and thirst
+(+0.0025/tick) rise forever, nothing in `calibos_mind/` ever emits the
+engine's food/drink events, NEED_ACTIONS maps hunger/thirst/loneliness to
+SEEK_CONTACT first, and forming habits were hardening the constant past
+the 0.65 fast-fire threshold. The need gate is load-bearing: a fixed
+cadence alone would ratchet needs to 0 (drop exceeds rise per cycle) or
+let them pin at 1.0 — both opposite degeneracies. Gated, hunger
+oscillates in roughly [0.25, 0.70] and thirst in [0.20, 0.72].
+
+### Fitness
+`tests/test_feeder.py` (15 tests, all green): pure-schedule rhythm,
+gating, offset non-coincidence, tick-0 and missing-key safety; event
+fields; engine-level exact deltas (−0.35/−0.40 within 1e-9 via
+`engine.step(advance_time=False)`); 600-tick synthetic run → hunger max
+0.69 / thirst max 0.70, never pinning at 1.0 (pristine control pins both
+at exactly 1.0), post-warm-up minima above 0.15 (no over-satiation);
+conduct diversifies — pinned-regime top-action share 0.42 (approach)
+vs 0.92 seek_contact pristine; determinism — identical need
+trajectories, action sequences, and feeding schedules across runs
+(engine memory ids are uuid4, pre-existing; store JSON compared
+uuid-normalized); dream ticks never feed (isolation holds); drift/status
+never feed; `maybe_feed` creates no files; reseed unaffected. Full suite
+below. No commit (backup job handles that).
+
+### Revert signal
+Feeder events on dream ticks or from read-only commands; over-satiation
+(needs driven to ~0); conduct phase-locking to the feeder instead of
+responding to needs; any existing test regresses.
+
+### assess_after
+2026-10-15.
+
+## 2026-10-08 — test-harness live-sidecar deletion: defect found, fixed, data lost
+
+### What
+Test-only fix (no engine/cartridge change): every test harness that calls
+`cmd_init` now redirects the complete module-level path set
+(DB, INBOX, DREAMS, SALIENCE, INTEROCEPTION, FAMILIARITY, AMBIVALENCE,
+HABITS, PROVENANCE, ARCHIVE, PROPOSALS). 18 files patched:
+test_init, test_ambivalence, test_familiarity, test_habits,
+test_interoception, test_realization, test_consolidate, test_supersede,
+test_expectation_policy, test_inbox_expectations, and adversarial
+test_critic_remember_r1, test_critic_interoception_r1/r2,
+test_critic_consolidate_r1/r2/r3, test_critic_attribution_round1,
+test_external_attribution_blind. (critic_realization_r1/r2 reuse
+test_realization's harness — covered by that patch.)
+
+### Defect
+`cmd_init` wipes the tracker sidecars even on a plain (non-`--force`)
+`init` when the DB is fresh, and unconditionally on `--force`. Several
+hand-rolled test harnesses redirected only the paths their own mutation
+touched. Running the full suite deleted four LIVE sidecars at the repo
+root (`familiarity.json`, `ambivalence.json`, `habits-formed.json`,
+`provenance.json`) plus the wake's filed host-feeder proposal
+(`proposals/2026-10-08-host-feeder-food-drink.md`, reconstructed below).
+Attribution, probe-verified per file with sentinel files:
+- `habits-formed.json`, `familiarity.json`, `ambivalence.json`:
+  `test_critic_remember_r1.py` (`init --force` with PROPOSALS/ARCHIVE
+  and the sidecars unredirected — also deleted the proposals file).
+- `familiarity.json`: additionally `test_critic_interoception_r1.py`,
+  `test_critic_interoception_r2.py`, `test_consolidate.py`,
+  `test_expectation_policy.py`, `test_inbox_expectations.py`,
+  `test_critic_consolidate_r2.py`, `test_external_attribution_blind.py`,
+  `test_supersede.py`, `test_critic_attribution_round1.py`
+  (plain `init` on a fresh tmp DB wipes unredirected sidecars too).
+- `ambivalence.json`: additionally `test_critic_interoception_r1.py`.
+- `provenance.json`: every harness calling `cmd_init` (plain or
+  `--force`) without redirecting PROVENANCE — test_init,
+  test_ambivalence, test_familiarity, test_habits, test_interoception,
+  test_realization, test_consolidate, test_supersede, the expectation
+  harnesses, and the critic interoception/realization/consolidation/
+  attribution batteries.
+The suite stayed green throughout — 611 passed while destroying live
+state. Reproduced per-file with sentinel files before patching; after
+patching, a full-suite run leaves live sentinels untouched and the
+suite green.
+
+### Data loss
+The four sidecars held ephemeral runtime learning state only
+(familiarity streaks, ambivalence marker runs, the habits co-fire
+window — last seen ticks 487–489 — plus formed-habit metadata,
+per-thought provenance traces). `mind.db` (608 records, tick 494),
+`salience.json`, `interoception.json`, `inbox/`, and `dreams/` are
+intact; formed habits also persist in the DB's `state.habits`. The
+sidecars rebuild naturally over the next days of operation. Vault
+recovery was considered and declined: the snapshots are encrypted to
+Jay's key, Calibos never holds it, and decrypting the full private
+thought stream to recover a few streak counts fails cost/benefit —
+noted here so the option is visible.
+
+### Follow-up
+The hand-rolled per-file harnesses are the systemic risk: each new
+sidecar re-opens this bug class. Proposed: a single canonical
+`redirect_all_cli_paths(tmp)` helper (in `calibos_mind` or
+`tests/_cli_tmp.py`) that every harness must use, plus a meta-test
+asserting no harness can reach a live path. Filed, not built today.
+
 ## 2026-10-08 — seek_contact streak adjudicated; host-feeder mutation spec filed
 
 ### What

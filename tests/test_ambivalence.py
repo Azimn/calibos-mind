@@ -371,14 +371,15 @@ def _patched_cli(tmp: Path):
     familiarity = tmp / "familiarity.json"
     ambivalence = tmp / "ambivalence.json"
     habits = tmp / "habits-formed.json"
+    provenance = tmp / "provenance.json"
     proposals = tmp / "proposals"
     archive = tmp / "archive"
     saved = (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
-             cli.AMBIVALENCE, cli.HABITS, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
+             cli.AMBIVALENCE, cli.HABITS, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
     cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.AMBIVALENCE, \
-        cli.HABITS, cli.PROPOSALS, cli.ARCHIVE = (
+        cli.HABITS, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE = (
             db, inbox, salience, interoception, familiarity, ambivalence,
-            habits, proposals, archive)
+            habits, provenance, proposals, archive)
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -396,7 +397,7 @@ def _patched_cli(tmp: Path):
 
 def _restore_cli(saved):
     (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
-     cli.AMBIVALENCE, cli.HABITS, cli.PROPOSALS, cli.ARCHIVE, cli._subject) = saved
+     cli.AMBIVALENCE, cli.HABITS, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE, cli._subject) = saved
 
 
 def test_init_force_wipes_sidecar():
