@@ -50,7 +50,7 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def check_prompt_fresh(payload: dict, sequence: int) -> None:
+def check_prompt_fresh(payload: dict, sequence: int, records=None) -> None:
     """Refuse a prompt queued from a view the store has moved past.
 
     Raises StalePromptError when records were added after the prompt was
@@ -58,16 +58,80 @@ def check_prompt_fresh(payload: dict, sequence: int) -> None:
     when the prompt predates queue-time provenance and its view cannot be
     verified. Answering from a stale view would let drift accounting move
     on thoughts the thinker never actually saw.
+
+    Narrowing (2026-10-09): when ``records`` (the workspace's current
+    record list) is given, the refusal is waived if every record added
+    since the queue-time view is thinker-authored — ``mind think``,
+    ``mind wake --affirm``, or ``mind answer`` itself. The hazard the
+    invariant guards is *unseen* material; records the thinker composed
+    are seen by definition, so the view is substantively fresh even
+    though the sequence moved. Anything else intervening — engine
+    heartbeat records, notes, dream echoes, or records that can no
+    longer be verified (evicted from the window) — still refuses, fail
+    closed. Omitting ``records`` keeps the original strict behavior.
     """
     queued = payload.get("view_sequence")
     if queued is None:
         raise StalePromptError("prompt predates queue-time provenance; "
                                "its view cannot be verified")
-    if sequence != queued:
-        raise StalePromptError(
-            f"view superseded: queued at tick {payload.get('view_tick')} "
-            f"(sequence {queued}), store is now at sequence {sequence}"
-        )
+    if sequence == queued:
+        return
+    if records is not None and _only_self_authored(records, queued, sequence):
+        return
+    raise StalePromptError(
+        f"view superseded: queued at tick {payload.get('view_tick')} "
+        f"(sequence {queued}), store is now at sequence {sequence}"
+    )
+
+
+# generated_by stamps for records the thinker composed themselves, via
+# inject_thought: "voluntary" (mind think), "wake" (mind wake --affirm),
+# "answered:<prompt-id>@<tick>" / "answered-external:<prompt-id>@<tick>"
+# (mind answer). Deliberately excluded: "cognition" (thoughts the
+# engine's own heartbeat produced — the thinker never composed them),
+# "dream-derived" (dream echoes — rehearsal, not composed thought), and
+# None (engine _add paths: perceptions, memory rehearsal, interoception).
+_SELF_AUTHORED_EXACT = frozenset({"voluntary", "wake"})
+_SELF_AUTHORED_PREFIXES = ("answered:", "answered-external:")
+
+
+def _is_self_authored(record) -> bool:
+    gb = getattr(record, "generated_by", None)
+    if gb in _SELF_AUTHORED_EXACT:
+        return True
+    return isinstance(gb, str) and gb.startswith(_SELF_AUTHORED_PREFIXES)
+
+
+def _only_self_authored(records, queued: int, sequence: int) -> bool:
+    """True when every record added after ``queued`` is thinker-authored.
+
+    Record ids are ``experience-{n}`` where n is the sequence value at
+    add time, so the intervening set is exactly the ids
+    experience-{queued+1} .. experience-{sequence}. Any id that cannot
+    be found (evicted from the window, unparseable) fails closed: an
+    unverifiable record is treated as unseen material.
+    """
+    by_id = {}
+    for r in records:
+        rid = getattr(r, "id", "")
+        try:
+            by_id[int(str(rid).rsplit("-", 1)[1])] = r
+        except (ValueError, IndexError):
+            continue
+    for n in range(queued + 1, sequence + 1):
+        r = by_id.get(n)
+        if r is None or not _is_self_authored(r):
+            return False
+    return True
+
+
+def prompt_answerable(payload: dict, sequence: int, records=None) -> bool:
+    """Read-only freshness probe for displays: True if answering now is allowed."""
+    try:
+        check_prompt_fresh(payload, sequence, records)
+    except StalePromptError:
+        return False
+    return True
 
 
 class InboxCognition:

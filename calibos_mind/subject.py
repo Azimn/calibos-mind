@@ -38,12 +38,14 @@ def validate_thought_text(text: str) -> str:
 class CalibosSubject(EndogenousSubject):
     def __init__(self, *args, salience_path=None, interoception_path=None,
                  familiarity_path=None, ambivalence_path=None, habits_path=None,
+                 counterfactual_path=None,
                  **kwargs):
         self._salience_path = salience_path
         self._interoception_path = interoception_path
         self._familiarity_path = familiarity_path
         self._ambivalence_path = ambivalence_path
         self._habits_path = habits_path
+        self._counterfactual_path = counterfactual_path
         self._dreaming = False
         super().__init__(*args, **kwargs)
         # Fresh stores get a stock workspace from __init__; existing stores are
@@ -59,6 +61,7 @@ class CalibosSubject(EndogenousSubject):
         self._attach_interoception()
         self._attach_familiarity()
         self._attach_ambivalence()
+        self._attach_counterfactual()
         self._attach_habits()
 
     def _attach_salience(self):
@@ -101,6 +104,20 @@ class CalibosSubject(EndogenousSubject):
                 self._ambivalence_path)
             install_observer(self)
 
+    def _attach_counterfactual(self):
+        # Foregone-option trace (see counterfactual.py). The tracker
+        # constructor only reads the sidecar; records move exclusively via
+        # note()+flush() on the waking-tick path (cli._run_tick). The
+        # observer is (re-)installed on the current engine instance here
+        # because _restore swaps in a fresh engine on every transaction —
+        # install_observer is idempotent, so re-attaching is a no-op when
+        # the instance is already observed.
+        if self._counterfactual_path is not None:
+            from .counterfactual import CounterfactualTracker, install_observer
+            self.workspace.counterfactual_tracker = CounterfactualTracker(
+                self._counterfactual_path)
+            install_observer(self)
+
     def _attach_habits(self):
         # Conduct-chasing habit formation (see habits.py). The tracker
         # constructor only reads the sidecar; the select_conduct observer
@@ -138,6 +155,14 @@ class CalibosSubject(EndogenousSubject):
         stranded = old_atracker._pending if old_atracker is not None else []
         if old_atracker is not None:
             old_atracker._pending = []
+        # Counterfactual pending carryover (same orphan class as the
+        # ambivalence one above): a foregone-option record staged during
+        # the heartbeat must survive the per-transaction tracker swap, or
+        # a genuine bypass observation is silently lost.
+        old_ctracker = getattr(self.workspace, "counterfactual_tracker", None)
+        stranded_c = old_ctracker._pending if old_ctracker is not None else []
+        if old_ctracker is not None:
+            old_ctracker._pending = []
         super()._restore(raw)
         self.workspace = CalibosWorkspace.from_dict(raw["workspace"])
         self._attach_salience()
@@ -146,6 +171,9 @@ class CalibosSubject(EndogenousSubject):
         self._attach_ambivalence()
         if stranded:
             self.workspace.ambivalence_tracker._pending = stranded
+        self._attach_counterfactual()
+        if stranded_c:
+            self.workspace.counterfactual_tracker._pending = stranded_c
         self._attach_habits()
         # from_dict builds a fresh CalibosWorkspace, dropping ad-hoc
         # attributes — re-set the display name (see __init__).

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import calibos_mind.cli as cli
 from calibos_mind.drift import drift_report
-from calibos_mind.provider import InboxCognition, StalePromptError, check_prompt_fresh
+from calibos_mind.provider import InboxCognition, StalePromptError, check_prompt_fresh, prompt_answerable
 
 BASE = Path(__file__).resolve().parents[1]
 LIVE_DB = BASE / "mind.db"
@@ -87,15 +87,17 @@ def test_voluntary_stamp():
 
 
 def test_stale_prompt_refused_never_answered():
-    """A prompt queued before intervening records is refused, not answered
-    stale: no thought is recorded and drift cannot move on it."""
+    """A prompt queued before *unseen* intervening records is refused, not
+    answered stale: no thought is recorded and drift cannot move on it.
+    (Self-authored intervening records — think/affirm/answer — do not
+    stale a view; see test_self_authored_intervening_allows_answer.)"""
     with CliOnTmp() as ctx:
         subject = cli._subject()
         pid = ctx.queue_prompt(subject)
-        # The store moves on after the prompt was queued.
-        subject.inject_thought("an intervening thought",
-                               trigger_kind="voluntary",
-                               generated_by="voluntary")
+        # The store moves on after the prompt was queued, with material the
+        # thinker never composed (engine _add path, generated_by=None).
+        with subject._transaction():
+            subject._add("perception", "an intervening perception")
         tracker = subject.workspace.salience_tracker
         r_before = drift_report(subject.inspect(), tracker)["ratio"]["R"]
         n_before = len(ctx.thoughts())
@@ -112,13 +114,29 @@ def test_stale_prompt_refused_never_answered():
         assert r_after == r_before, (r_before, r_after)
 
 
+def test_self_authored_intervening_allows_answer():
+    """The narrowing: records the thinker composed between queue time and
+    answer time (think, affirm, answer) do not stale the view — the
+    hazard the freshness invariant guards is unseen material."""
+    with CliOnTmp() as ctx:
+        subject = cli._subject()
+        pid = ctx.queue_prompt(subject)
+        subject.inject_thought("an intervening thought of my own",
+                               trigger_kind="voluntary",
+                               generated_by="voluntary")
+        rc = cli.main(["answer", pid, "a timely answer after my own thought"])
+        assert rc == 0, rc
+        assert any(r["first_person"] == "a timely answer after my own thought"
+                   for r in ctx.thoughts())
+        assert not list(cli.INBOX.glob("prompt-*.json"))
+
+
 def test_stale_prompt_silence_also_refused():
     with CliOnTmp() as ctx:
         subject = cli._subject()
         pid = ctx.queue_prompt(subject)
-        subject.inject_thought("another intervening thought",
-                               trigger_kind="voluntary",
-                               generated_by="voluntary")
+        with subject._transaction():
+            subject._add("perception", "another intervening perception")
         rc = cli.main(["answer", pid, "--silent"])
         assert rc == 1, rc
         assert not list(cli.INBOX.glob("prompt-*.json"))
@@ -155,6 +173,48 @@ def test_check_prompt_fresh_unit():
         pass
     else:
         raise AssertionError("missing provenance not refused")
+
+
+class _FakeRecord:
+    def __init__(self, seq, generated_by=None):
+        self.id = f"experience-{seq}"
+        self.generated_by = generated_by
+
+
+def _refuses(payload, sequence, records):
+    try:
+        check_prompt_fresh(payload, sequence, records)
+    except StalePromptError:
+        return True
+    return False
+
+
+def test_check_prompt_fresh_self_authored_narrowing():
+    # Strict two-arg form keeps the original behavior (records omitted).
+    assert _refuses({"view_tick": 4, "view_sequence": 10}, 12, None)
+    payload = {"view_tick": 4, "view_sequence": 10}
+    # Only thinker-authored records intervened: think, affirm, answer.
+    own = [_FakeRecord(11, "voluntary"),
+           _FakeRecord(12, "wake"),
+           _FakeRecord(13, "answered:prompt-0001@9"),
+           _FakeRecord(14, "answered-external:prompt-0002@9")]
+    check_prompt_fresh(payload, 14, own)  # no raise
+    assert prompt_answerable(payload, 14, own)
+    # One engine-authored record (heartbeat perception) -> still refused.
+    mixed = own + [_FakeRecord(15, None)]
+    assert _refuses(payload, 15, mixed)
+    assert not prompt_answerable(payload, 15, mixed)
+    # Dream echoes are not thinker-composed -> refused.
+    dreamed = own + [_FakeRecord(15, "dream-derived")]
+    assert _refuses(payload, 15, dreamed)
+    # Engine heartbeat thoughts ("cognition") are not thinker-composed.
+    engine_thought = own + [_FakeRecord(15, "cognition")]
+    assert _refuses(payload, 15, engine_thought)
+    # An evicted (missing) intervening record fails closed.
+    gapped = [_FakeRecord(11, "voluntary"), _FakeRecord(13, "wake")]
+    assert _refuses(payload, 13, gapped)
+    # Legacy prompt without provenance still refused even with records.
+    assert _refuses({"view_tick": 4}, 14, own)
 
 
 def test_live_store_untouched():

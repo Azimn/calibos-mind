@@ -137,9 +137,11 @@ def test_refusal_paths_do_not_register():
         subject = cli._subject()
         rc, _ = _run(["queue", "answer me tonight", "--from", "kiki"])
         assert rc == 0, rc
-        subject.inject_thought("an intervening thought",
-                               trigger_kind="voluntary",
-                               generated_by="voluntary")
+        # Genuinely unseen intervening material (engine _add path), so the
+        # view is truly stale — a self-authored thought would no longer
+        # stale it (self-authored narrowing, 2026-10-09).
+        with subject._transaction():
+            subject._add("perception", "an intervening perception")
         rc, _ = _run(["answer", "prompt-0001", "a late answer"])
         assert rc == 1, rc  # refused — stale view
         rc, _ = _run(["heartbeat", "--ticks", "1"])

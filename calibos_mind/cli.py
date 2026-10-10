@@ -47,6 +47,7 @@ SALIENCE = BASE / "salience.json"
 INTEROCEPTION = BASE / "interoception.json"
 FAMILIARITY = BASE / "familiarity.json"
 AMBIVALENCE = BASE / "ambivalence.json"
+COUNTERFACTUAL = BASE / "counterfactuals.json"
 HABITS = BASE / "habits-formed.json"
 PROVENANCE = BASE / "provenance.json"
 ARCHIVE = BASE / "archive"
@@ -88,6 +89,7 @@ def _subject(provider=None):
                              interoception_path=INTEROCEPTION,
                              familiarity_path=FAMILIARITY,
                              ambivalence_path=AMBIVALENCE,
+                             counterfactual_path=COUNTERFACTUAL,
                              habits_path=HABITS)
     if isinstance(provider, InboxCognition):
         # Stamp queued prompts with the store tick and record sequence at
@@ -147,6 +149,11 @@ def cmd_init(args):
     # bug class as the salience/familiarity resets above).
     if AMBIVALENCE.exists():
         AMBIVALENCE.unlink()
+    # Foregone-option trace sidecar (2026-10-09): stale bypass records
+    # must never attach to a reseeded incarnation's ticks (same bug class
+    # as the salience/familiarity/ambivalence resets above).
+    if COUNTERFACTUAL.exists():
+        COUNTERFACTUAL.unlink()
     # Habit formation sidecar (2026-10-02): stale formation windows and
     # formed-habit records must never attach to a reseeded incarnation's
     # ticks (same bug class as the salience/familiarity resets above).
@@ -246,6 +253,21 @@ def _run_tick(subject):
     atracker = getattr(subject.workspace, "ambivalence_tracker", None)
     if atracker is not None:
         atracker.flush()
+    # Foregone-option traces (2026-10-09): flush any habit-bypass records
+    # the _choose_intention observer noted during the tick. Flushed HERE,
+    # right after the ambivalence flush and before the habits block below —
+    # not after it — because the habits reconcile may open a transaction
+    # when formed-habit state changed, and _restore would swap in a fresh
+    # tracker with an empty pending buffer: the staged record would die
+    # with the discarded tracker (same orphan class as the 2026-10-03
+    # ambivalence fix). Waking ticks only — _run_tick never serves dream
+    # ticks (dream_tick() is a separate path), so dream isolation is
+    # untouched. flush() saves only when a record was actually noted
+    # (no-op write discipline); read-only commands never tick, so they
+    # never write the sidecar.
+    ctracker = getattr(subject.workspace, "counterfactual_tracker", None)
+    if ctracker is not None:
+        ctracker.flush()
     # Habit formation (2026-10-02): conduct chasing. The select_conduct
     # observer noted this tick's (trigger, action) on the tracker's pending
     # slot during the heartbeat above; fold it into the rolling window here.
@@ -388,12 +410,17 @@ def cmd_inbox(args):
         return 0
     # Mark prompts whose view the store has already moved past: answering
     # them will be refused (refused-stale-view) by design, so flag them here
-    # rather than letting the list imply they are all answerable. Read-only;
-    # no change to the freshness invariant or its expectation bookkeeping.
+    # rather than letting the list imply they are all answerable. The flag
+    # uses the same rule as the answer path (self-authored intervening
+    # records do not stale a view), so display and behavior agree.
+    # Read-only; no change to the freshness invariant or its expectation
+    # bookkeeping.
+    from .provider import prompt_answerable
     subject = _subject()
     seq = subject.workspace.sequence
+    records = subject.workspace.records
     for item in pending:
-        stale = item.get("view_sequence") != seq
+        stale = not prompt_answerable(item, seq, records)
         flag = " [stale view — answering will be refused]" if stale else ""
         print(f"== {item['id']}{flag} ==")
         for e in item["experiences"]:
@@ -494,7 +521,11 @@ def cmd_answer(args):
     tracker = _tracker(subject)
     now = subject.engine.state.tick
     try:
-        check_prompt_fresh(payload, subject.workspace.sequence)
+        # The self-authored narrowing lives in check_prompt_fresh: records
+        # the thinker composed between queue time and now (think, affirm,
+        # answer) do not stale the view — the hazard is unseen material.
+        check_prompt_fresh(payload, subject.workspace.sequence,
+                           subject.workspace.records)
     except StalePromptError as exc:
         # The prompt is already consumed (deleted); it cannot be answered
         # or let pass from a view the store has moved past. If the matter

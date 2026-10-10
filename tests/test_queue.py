@@ -104,14 +104,16 @@ def test_queue_answer_fresh_succeeds():
         assert not list(cli.INBOX.glob("prompt-*.json"))
 
 
-def test_queue_answer_after_intervening_thought_refused():
+def test_queue_answer_after_unseen_record_refused():
+    """A prompt queued before unseen intervening records is refused, not
+    answered stale. (A self-authored intervening thought no longer stales
+    the view — self-authored narrowing, 2026-10-09.)"""
     with CliOnTmp() as ctx:
         subject = cli._subject()
         rc = cli.main(["queue", "read something tonight"])
         assert rc == 0, rc
-        subject.inject_thought("an intervening thought",
-                               trigger_kind="voluntary",
-                               generated_by="voluntary")
+        with subject._transaction():
+            subject._add("perception", "an intervening perception")
         n_before = len(ctx.thoughts())
         rc = cli.main(["answer", "prompt-0001", "a late answer"])
         assert rc == 1, rc
@@ -159,11 +161,12 @@ def test_inbox_flags_stale_view():
         fresh = buf.getvalue()
         assert "prompt-0001" in fresh, fresh
         assert "stale view" not in fresh, fresh
-        # An intervening store write moves the sequence past the prompt's
-        # queue-time view: the listing must now say so.
-        subject.inject_thought("an intervening thought",
-                               trigger_kind="voluntary",
-                               generated_by="voluntary")
+        # An intervening store write of unseen material moves the sequence
+        # past the prompt's queue-time view: the listing must now say so.
+        # (A self-authored thought would no longer stale it — the display
+        # uses the same narrowed rule as the answer path.)
+        with subject._transaction():
+            subject._add("perception", "an intervening perception")
         buf = io.StringIO()
         with redirect_stdout(buf):
             assert cli.main(["inbox"]) == 0

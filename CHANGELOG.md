@@ -11,6 +11,110 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-09 — self-authored narrowing of the prompt-freshness invariant
+
+### What
+`check_prompt_fresh` (`calibos_mind/provider.py`) no longer refuses a
+prompt merely because the workspace sequence moved past its queue-time
+view when every intervening record is thinker-authored — `mind think`
+(`generated_by="voluntary"`), `mind wake --affirm` (`"wake"`), or `mind
+answer` itself (`"answered:…"` / `"answered-external:…"`). New
+`prompt_answerable()` read-only probe; `cmd_answer` and the `mind
+inbox` stale-view flag both use the narrowed rule so display and
+behavior agree.
+
+### Why
+Observed live this morning: the wake ritual's own order (affirm, then
+answer) guaranteed every pending prompt died as refused-stale-view —
+the affirm's thought write superseded the prompt's view before it could
+be answered. The invariant's stated hazard is *unseen* material reaching
+drift accounting; records the thinker composed are seen by definition,
+so the strict equality was refusing sound answers. Fail-closed where it
+matters: engine heartbeat records (`generated_by=None` / `"cognition"`),
+dream echoes (`"dream-derived"`), notes, and any intervening record
+that can no longer be verified (evicted from the window) still refuse.
+Omitting `records` keeps the original strict two-arg behavior.
+
+### Tests
+New `test_check_prompt_fresh_self_authored_narrowing` (7 unit cases:
+voluntary/wake/answered allowed; engine perception, dream-derived,
+"cognition", evicted-gap, and legacy-no-provenance refused) and
+`test_self_authored_intervening_allows_answer` (CLI end-to-end). Three
+existing tests encoded the old strict behavior as the refusal scenario
+(`test_stale_prompt_refused_never_answered`,
+`test_stale_prompt_silence_also_refused`,
+`test_queue_answer_after_intervening_thought_refused`,
+`test_inbox_flags_stale_view`, `test_refusal_paths_do_not_register`);
+their intervening writes are now engine-authored perceptions so they
+still exercise the refusal path they were written for. Full suite:
+381 passed; adversarial suite: 282 passed.
+
+## 2026-10-09 — foregone-option trace for habit bypasses (builder)
+
+### What
+New `calibos_mind/counterfactual.py` + hook in `cli._run_tick` + dated
+CHANGELOG entry. Trace-only: the frozen engine's conduct authority is
+untouched (don't-touch list).
+
+When a formed habit fires through the engine's ≥0.65 within-channel
+bypass, the deliberated alternative it displaced was discarded silently.
+This mutation records it: a local-only sidecar `counterfactuals.json`
+(capped at the last 128 records, gitignored, `init --force` wipes it)
+gains one entry per genuine bypass tick:
+`{tick, habit_key, trigger_channel, chosen_action, foregone_action,
+dominant_need, dominant_pressure, margin}`.
+
+The observer wraps `engine._choose_intention` on the composed instance
+(never the frozen class or its source), delegates to the pristine bound
+method first, then recomputes the deliberated path read-only — WITHOUT
+calling `_choose_intention` (it has side effects: `habit.last_used_tick`)
+and mirroring its logic exactly: apology-event bypass (no foregone
+option), the 0.12 pressure-vs-need deadband, the real NEED_ACTIONS /
+PRESSURE_ACTIONS tables (imported from `digital_subject.engine`, never
+copied — identity-asserted in tests), the trust<0.25 → CONCEAL branch on
+the RAW pressure value (not the triage magnitude), else options[0].
+Bypass detection is read-only: a habit in `engine.state.habits` with
+`last_used_tick == current tick` (the bypass branch is its only writer),
+`strength >= 0.65`, `action ==` the tick's selected action, and a
+recomputed deliberated choice that differs from the habit action. No
+record on apology ticks, CONCEAL ticks, clear-margin ticks where the
+habit action equals options[0], or any tick where no formed habit fired.
+Dream ticks and read-only commands never write; determinism is
+byte-identical sidecars on identical sequences. Wired through
+`CalibosSubject(counterfactual_path=...)` with the same
+`_restore` pending-carryover the ambivalence tracker got (2026-10-03
+orphan class), flushed in `_run_tick` before the habits reconcile block.
+
+### Why
+2026-10-09 articles review, Domain 14 (Decision making): the "No habitual
+choices" check is addressed, but every bypass silently discards a
+deliberated alternative — the decision's counterfactual is invisible.
+Making it legible is honest bookkeeping in the ambivalence family:
+evidence for future falsification passes, decision texture without
+installing any bias as theater, and zero conduct-authority change.
+
+### Fitness
+On synthetic /tmp stores: a scripted habit-bypass tick (formed
+fear→withdraw at 0.65, trust 0.10) → exactly one record naming
+foregone_action "conceal" (twin-control proven: without the habit the
+engine chooses conceal); clear-margin ticks (habit action ==
+options[0]), apology ticks, and CONCEAL ticks → zero records, sidecar
+never created; 100-tick soak with trust dips at 4 ticks → exactly 4
+records (4% < 5%), all at genuine bypass ticks; byte-identical sidecar
+on replay; drift/status/review/consolidate-dry-run sweep never writes;
+dream ticks never write; `init --force` wipes; full suite green.
+No commit (backup job handles that).
+
+### Revert signal
+A record on any tick where no ≥0.65 bypass fired; foregone option that
+does not match a pristine-engine recomputation on a scripted sequence
+(fidelity break); >5% of ticks in any 100-tick window in vivo (noise not
+signal); sidecar written by a read-only command or dream tick; any
+existing test regresses.
+
+### assess_after
+2026-10-23.
+
 ## 2026-10-08 — host-layer feeder for food/drink (builder)
 
 ### What
