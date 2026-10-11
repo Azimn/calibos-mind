@@ -11,6 +11,59 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-10 — bidirectional confidence revision for narrative claims (builder, in loop)
+
+### What
+`_maybe_reflect` no longer ratchets narrative-claim confidence monotonically
+(`max(old, new) + 0.02`, saturating at 1.0, no decay, no revision). New
+behavior, per proposals/2026-10-10-reflect-bidirectional-confidence.md:
+(1) signed updates — agreeing evidence moves confidence *toward* the evidence
+mass `clamp(0.35 + n*0.08)` asymptotically, never overshooting it;
+(2) slow decay toward uncertainty (0.5) for claims not rehearsed at a
+reflection gate, time-based from `updated_tick` (half-life ~693 ticks), floor
+explicit at 0.5;
+(3) contradiction trigger — when the live `_narrative_sentence` output's
+valence class (positive/negative/unsettled, ±0.15 thresholds) disagrees with
+the stored claim's class, the proposition is rewritten from the live
+sentence, valence rebased on the new evidence, confidence cut halfway toward
+0.5.
+Kept: mint path (including the "I formed a conclusion" memory), the
+>=3-repeated-tag gate, the reflection-interval gate, valence averaging for
+agreeing evidence.
+
+### Why
+Observed live: `pattern:comfort` at 1.0 since tick 144; `pattern:social` at
+1.0 while propositionally "unsettled" — narrative state contradicting the
+live reading with no mechanism to ever correct itself. Monotonic confidence
+is the fossilization failure mode the Articles warn about.
+
+### How (tracked-artifact constraint)
+Wrapper-level overlay: new `calibos_mind/narrative.py` patches
+`SubjectEngine._maybe_reflect` at import time (precedent:
+`calibos_mind/projection.py`), wired in `calibos_mind/__init__.py`. The venv
+(`.venv/.../digital_subject/engine.py`) is byte-identical — no direct edit,
+no patch file needed; the fix ships in the tracked repo, survives venv
+rebuilds, and reverts by deleting one module plus its import line.
+`narrative.uninstall()` restores the frozen original for before/after checks.
+
+### Deploy-day note
+Claims unrehearsed for a long time (the fossils) decay toward 0.5 on the first
+reflection gate after this lands — specified behavior, not a bug. Revert
+signal: claims unstable under consistent evidence; any blinded-region test
+breaks; decay untunable.
+
+### Tests
+New `tests/test_narrative_bidirectional.py` (13 tests, synthetic /tmp stores
+only): contradiction cuts 1.0 -> 0.75 in one update; sustained contradiction
+decreases monotonically; decay matches the documented rate and floor;
+rehearsed claims don't decay; 60 agreeing updates never exceed evidence mass;
+mint-at-1.0 doesn't survive contradiction; mixed-evidence soak shows no stale
+maxima; mint path unchanged; dream ticks leave narrative claims untouched;
+`debug_snapshot()` writes nothing; blinded fixtures (feeder/ablation/
+remember) identical with overlay installed vs uninstalled. Full existing suite:
+663/663 green with the overlay active (2026-10-10 ~23:45 CDT). Awaiting critic
+— not self-approved.
+
 ## 2026-10-09 — self-authored narrowing of the prompt-freshness invariant
 
 ### What
