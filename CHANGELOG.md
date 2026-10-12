@@ -11,6 +11,89 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-12 — stale-habit notes: repeated failed attempts become representable (domain 17, builder, in loop)
+
+### What
+A formed habit that fires by bypass while its trigger-relevant need never
+improves now leaves a trace. When a `formed:<trigger>:<action>` habit fires
+by the engine's own bypass rule (sidecar strength >= 0.65 — the
+`HABIT_FIRE_STRENGTH` constant imported from `counterfactual.py`, not
+redefined — tick (trigger, action) naming the habit, and the engine's
+`last_used_tick` stamp proving the bypass branch ran this tick) and the
+trigger-relevant need's per-tick delta is >= 0 for 5 consecutive firings,
+exactly one temporal record is minted noting the failure. Record-only: no
+auto-removal, no strength change. One note per episode; an improving
+firing (delta < 0) resets the streak and re-arms. Authored habits are
+never considered.
+
+### Where
+`calibos_mind/habits.py` (single module — the revert path is deleting one
+`cli._run_tick` block plus the new module sections) plus wiring in
+`cli._run_tick` (waking ticks only; dream ticks and read-only commands
+never mint or touch streak state). Per-habit streak state lives in
+`habits-formed.json` under a new `stale_streaks` key, under the sidecar's
+established load/validation/reseed discipline (strict-load raises on a
+malformed key; a missing key loads as empty, so pre-mutation sidecars
+work; `init --force` unlinks the file, wiping the key with it).
+
+### Why
+Domain 17 check 8 ("no repeated failed attempts") was absent — the system
+could not represent a routine that isn't working. In-vivo evidence:
+record experience-671 (tick 519) observed hunger rising +0.002/tick while
+formed:hunger:seek_contact kept firing, and only feeder food events
+satiate hunger — a real repeated-failed-attempt that went unrepresented.
+Check 7 (abandoned projects) stays record-only, as designed. Spec:
+`research/specs/2026-10-12-habit-stale-note.md`; assess_after 2026-10-26.
+
+### Mechanism notes
+- The trigger-relevant delta uses one shared helper with the formation
+  window row (need's own delta; dominant need's delta for pressure
+  triggers) so the definition cannot drift.
+- Crash discipline mirrors the interoceptive-realization write-ahead:
+  the owed episode dict is saved to the sidecar BEFORE the mint
+  transaction; `mint_stale_note` is idempotent on (habit_key,
+  start_tick); `ack_stale_notes` latches `noted_start` and clears the
+  owed mark only after the mint commits. A pre-mint crash re-mints on
+  the next tick (no loss); a post-mint crash re-mints idempotently (no
+  duplicate). The owed dict carries its own episode identity, so a
+  reset landing between crash and recovery cannot orphan it.
+- Canonical first-person text, parseable by anchored fullmatch
+  (serialization-identity discipline, cf. `_REALIZATION_RE`). Deliberate
+  deviations from the draft example: no contractions and ASCII-only, per
+  the contraction-negation genome items; a second machine sentence
+  carries (habit_key, consecutive_firings, trigger_need, last_delta in
+  fixed `+0.002000` format, episode start/end ticks), all recoverable
+  from the record alone.
+- Builder round notes: the serialization-identity check caught a real
+  bug before shipping — the first regex draft omitted the "on the
+  last" clause the writer emits, which would have defeated the
+  idempotency scan on crash recovery and double-minted.
+
+## 2026-10-12 — fitness assessments: interoceptive realization records, strain-scaled noise, self-relevance retrieval gain (all KEEP)
+
+All three mutations reached their `assess_after` date and were evaluated
+against the live store. Verdicts recorded in the rotation state
+(`goals/calibos-autonomous-mind-operation/hidden_files/articles-rotation.json`).
+
+- **interoceptive realization records (2026-10-04) — KEEP.** Four genuine
+  realization records minted in vivo (ticks 513, 548, 561, 588), each with
+  swing tick, convergence tick, felt band, and actual band recoverable from
+  the record text. In the 100-tick window [488, 588]: 4 realization records
+  out of 226 minted records = 1.77%, under the 2% revert tripwire. No
+  phantom/noise-only mints (every record shows a genuine band swing), no
+  mints on dream ticks, `archive/` empty (no false consolidation of a
+  realization record). Suite green.
+- **strain-scaled interoceptive noise (2026-10-05) — KEEP.** No evidence of
+  |felt−actual| > 0.05 on a calm body, no felt-band flicker, no noise-only
+  realization records, no phantom episodes under sustained high weariness
+  (the four realization mints all show genuine swings; the synthetic
+  100k-tick phantom hunt at weariness 1 stands). Suite green.
+- **self-relevance retrieval gain (2026-10-06) — KEEP.** Records carrying the
+  gain signals (engine "This event concerns me:" stamp, `identity` concept,
+  whole-word `calibos` mention) are 1 of the current top-24 salience window —
+  no dominance (revert signal was >50% of the unpinned window). No
+  dedupe-bypass evidence. Suite green.
+
 ## 2026-10-10 — bidirectional confidence revision for narrative claims (builder, in loop)
 
 ### What

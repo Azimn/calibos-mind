@@ -750,7 +750,8 @@ def test_missing_sidecar_loads_empty_without_raise():
     file, never on absence."""
     tmp = _tmp()
     tracker = HabitFormationTracker(tmp / "habits-formed.json")
-    assert tracker.data == {"window": [], "formed": {}, "archived": []}
+    assert tracker.data == {"window": [], "formed": {}, "archived": [],
+                            "stale_streaks": {}}, tracker.data
 
 
 def test_corrupt_sidecar_raises_fail_loud():

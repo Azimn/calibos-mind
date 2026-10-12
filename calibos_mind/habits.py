@@ -58,6 +58,22 @@ pressure key it has no need-delta of its own; the check then uses the
 tick's dominant need (the need under most demand while the pressure
 drove) — documented here, not hidden, because pressure-driven repetition
 (fear -> withdraw) is exactly the material bad habits are made of.
+
+Stale-habit notes (domain 17, 2026-10-12): a formed habit can fire by
+bypass while its trigger-relevant need never improves — a routine that
+isn't working, which the taxonomy's check 8 requires the system to
+represent. When a formed habit fires by bypass (the engine's own fire
+rule, mirrored from counterfactual._fired_habit: sidecar strength >=
+0.65, tick (trigger, action) == the habit's, and the engine's
+last_used_tick stamp proving the bypass branch ran) and the
+trigger-relevant need's per-tick delta is >= 0 (not improving) for
+STALE_FIRINGS consecutive firings, exactly one temporal record notes the
+failure. Record-only: no auto-removal, no strength change — an improving
+firing (delta < 0) resets the streak and re-arms. One note per episode.
+Authored habits are never touched. Streak state lives in the sidecar
+under "stale_streaks"; the mint path follows the interoceptive-
+realization precedent (temporal source, generated_by=cognition,
+write-ahead crash discipline, canonical parseable text).
 """
 from __future__ import annotations
 
@@ -65,9 +81,15 @@ import functools
 import json
 import math
 import os
+import re
 from pathlib import Path
 
 from digital_subject.models import Action, Habit
+
+# Imported, not redefined: the bypass-strength definition must stay a
+# single source of truth with counterfactual._fired_habit (regression
+# genome: shadowing definitions).
+from .counterfactual import HABIT_FIRE_STRENGTH
 
 # Rolling window: the last N observed waking ticks considered for formation.
 FORMATION_WINDOW = 8
@@ -102,6 +124,9 @@ CHANNEL_RULE_BYPASS_KINDS = frozenset({"apology"})
 # Written reason on every removal: history archived with a reason, never
 # silently deleted.
 REMOVAL_REASON = "decayed below formation floor through disuse"
+# Consecutive non-improving bypass firings of one formed habit that mint
+# exactly one stale-habit note (domain 17 check 8).
+STALE_FIRINGS = 5
 
 
 def _finite_number(value) -> bool:
@@ -138,6 +163,20 @@ def resolve_trigger(needs, pressures):
     return n_key, n_key
 
 
+def _trigger_need_delta(trigger: str, dominant_need: str,
+                        need_deltas: dict) -> tuple[str, float]:
+    """The trigger-relevant need key and its rounded per-tick delta.
+
+    One definition shared by the formation window row (observe_tick) and
+    the stale-habit streak (observe_bypass_streak): the trigger's own
+    delta for need triggers, the dominant need's delta for pressure
+    triggers (a pressure key has no need-delta of its own — the same
+    documented ambiguity resolution as formation).
+    """
+    need_key = trigger if trigger in need_deltas else dominant_need
+    return need_key, round(float(need_deltas.get(need_key, 0.0)), 6)
+
+
 class HabitFormationTracker:
     """Rolling-window habit formation backed by a local-only sidecar.
 
@@ -152,6 +191,15 @@ class HabitFormationTracker:
     - ``archived``: removal notes ``{"key", "peak", "lifespan_ticks",
       "reason", "archived_tick"}``, newest last, capped at
       ``ARCHIVE_CAP``.
+    - ``stale_streaks`` (domain 17, 2026-10-12): per formed-habit
+      non-improvement streaks ``{"formed:<trigger>:<action>": {"count",
+      "start_tick", "last_tick", "last_delta", "trigger_need", "owed",
+      "noted_start"}}``. ``count`` is consecutive bypass firings with
+      trigger-need delta >= 0; an improving firing resets it and
+      re-arms. ``owed`` is None, or the closed episode's mint event
+      (the write-ahead mark: set before the mint transaction, cleared
+      by ack after it commits). ``noted_start`` is the start_tick of
+      the last noted episode — the one-note-per-episode latch.
 
     The constructor only reads the sidecar. One waking tick folds in via
     ``observe_tick()``; the caller saves only when it reports a change
@@ -178,7 +226,8 @@ class HabitFormationTracker:
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.data: dict = {"window": [], "formed": {}, "archived": []}
+        self.data: dict = {"window": [], "formed": {}, "archived": [],
+                           "stale_streaks": {}}
         self._pending: dict | None = None
         if self.path.exists():
             try:
@@ -211,6 +260,12 @@ class HabitFormationTracker:
                 self.data["archived"] = [
                     a for a in archived if isinstance(a, dict)
                 ][-ARCHIVE_CAP:]
+            # Stale-streak state (domain 17, 2026-10-12): strict-load like
+            # the formed map — a malformed streak entry raises rather than
+            # silently mis-minting. A missing key is a legitimate
+            # pre-mutation sidecar (fresh empty streaks).
+            self.data["stale_streaks"] = self._validated_stale_streaks(
+                loaded.get("stale_streaks"))
 
     @staticmethod
     def _valid_window_row(row) -> bool:
@@ -329,6 +384,105 @@ class HabitFormationTracker:
             out[key] = meta
         return out
 
+    @staticmethod
+    def _validated_stale_streaks(raw) -> dict:
+        """Strict-load the stale-streak map; any malformed entry raises.
+
+        Same fail-loud discipline as ``_validated_formed``: the streak map
+        drives exactly-one minting, so a silently-repaired entry could
+        double-mint or lose a note. Every numeric field rejects bools;
+        ticks are non-negative with ``last_tick >= start_tick``; the
+        note flags are real bools; the key names the formed namespace.
+        """
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"habits sidecar 'stale_streaks' must be an object, got "
+                f"{type(raw).__name__}; refusing to run on fabricated "
+                f"continuity")
+        out = {}
+        for key, entry in raw.items():
+            problem = None
+            if not (isinstance(key, str) and key.startswith(FORMED_PREFIX)):
+                problem = f"key {key!r} is not a {FORMED_PREFIX!r} string"
+            elif not isinstance(entry, dict):
+                problem = f"entry {key!r} is not an object"
+            else:
+                count = entry.get("count")
+                if (not isinstance(count, int) or isinstance(count, bool)
+                        or count < 0):
+                    problem = (f"entry {key!r} has non-int/negative "
+                               f"count {count!r}")
+            if problem is None:
+                start = entry.get("start_tick")
+                last = entry.get("last_tick")
+                for field, value in (("start_tick", start),
+                                     ("last_tick", last)):
+                    if (not isinstance(value, int)
+                            or isinstance(value, bool) or value < 0):
+                        problem = (f"entry {key!r} has non-int/negative "
+                                   f"{field} {value!r}")
+                        break
+                else:
+                    if last < start:
+                        problem = (f"entry {key!r} last_tick {last} "
+                                   f"< start_tick {start}")
+            if problem is None:
+                if not _finite_number(entry.get("last_delta")):
+                    problem = (f"entry {key!r} has non-finite last_delta "
+                               f"{entry.get('last_delta')!r}")
+                elif not (isinstance(entry.get("trigger_need"), str)
+                          and entry["trigger_need"]):
+                    problem = (f"entry {key!r} has no string "
+                               f"trigger_need")
+                else:
+                    owed = entry.get("owed")
+                    if owed is not None:
+                        problem = HabitFormationTracker._owed_problem(
+                            key, owed)
+            if problem is None:
+                noted = entry.get("noted_start")
+                if (noted is not None
+                        and (not isinstance(noted, int)
+                             or isinstance(noted, bool) or noted < 0)):
+                    problem = (f"entry {key!r} has non-int/negative "
+                               f"noted_start {noted!r}")
+            if problem is not None:
+                raise ValueError(
+                    f"habits sidecar 'stale_streaks' malformed: {problem}; "
+                    f"refusing to run on fabricated continuity")
+            out[key] = entry
+        return out
+
+    @staticmethod
+    def _owed_problem(key: str, owed) -> str | None:
+        """Shape-check one owed-episode dict; None when sound."""
+        if not isinstance(owed, dict):
+            return f"entry {key!r} has non-object owed {owed!r}"
+        for field in ("trigger", "action", "trigger_need"):
+            if not (isinstance(owed.get(field), str) and owed[field]):
+                return f"entry {key!r} owed has no string {field}"
+        firings = owed.get("consecutive_firings")
+        if (not isinstance(firings, int) or isinstance(firings, bool)
+                or firings < 1):
+            return (f"entry {key!r} owed has non-int/negative "
+                    f"consecutive_firings {firings!r}")
+        if not _finite_number(owed.get("last_delta")):
+            return (f"entry {key!r} owed has non-finite last_delta "
+                    f"{owed.get('last_delta')!r}")
+        start = owed.get("start_tick")
+        end = owed.get("end_tick")
+        for field, value in (("start_tick", start), ("end_tick", end)):
+            if (not isinstance(value, int) or isinstance(value, bool)
+                    or value < 0):
+                return (f"entry {key!r} owed has non-int/negative "
+                        f"{field} {value!r}")
+        if end < start:
+            return (f"entry {key!r} owed end_tick {end} "
+                    f"< start_tick {start}")
+        return None
+
     # -- observation slot (written by the select_conduct wrapper) ---------
 
     def note_tick(self, tick: int, trigger: str, action: str, dominant_need: str) -> None:
@@ -370,8 +524,7 @@ class HabitFormationTracker:
             return False, False
         before = {k: v["strength"] for k, v in self.data["formed"].items()}
 
-        delta_key = trigger if trigger in need_deltas else dominant_need
-        delta = round(float(need_deltas.get(delta_key, 0.0)), 6)
+        _, delta = _trigger_need_delta(trigger, dominant_need, need_deltas)
         self.data["window"].append({
             "tick": int(tick),
             "trigger": str(trigger),
@@ -428,6 +581,124 @@ class HabitFormationTracker:
                          any(s != after.get(k) for k, s in before.items()))
         return True, state_changed
 
+    # -- stale-habit streaks (domain 17, 2026-10-12) -------------------------
+
+    def observe_bypass_streak(self, *, tick: int, trigger: str, action: str,
+                              dominant_need: str, need_deltas: dict,
+                              state_habits: dict) -> tuple[list, bool]:
+        """Fold one waking tick's bypass outcome into the stale streaks.
+
+        Returns ``(events, sidecar_changed)``. ``events`` holds at most one
+        mint event per habit: a recovery re-mint for an ``owed`` episode
+        left by a crashed tick, and/or the newly closed episode. The
+        caller must save the sidecar when ``sidecar_changed`` BEFORE
+        minting (write-ahead), then mint, then ``ack_stale_notes()``.
+
+        Bypass detection mirrors ``counterfactual._fired_habit``: the
+        formed habit's sidecar strength >= ``HABIT_FIRE_STRENGTH``, the
+        tick's (trigger, action) names it, and the engine's own
+        ``last_used_tick`` stamp proves the bypass branch fired this
+        tick. Without the stamp a deliberated choice that merely
+        coincides with the habit (e.g. while it sits in cooldown) would
+        be misattributed. Authored habits are never considered: only the
+        ``formed:`` namespace is read.
+        """
+        events: list = []
+        changed = False
+        streaks = self.data["stale_streaks"]
+        # Self-healing: a removed habit cannot fire — drop its streak.
+        for key in [k for k in streaks if k not in self.data["formed"]]:
+            del streaks[key]
+            changed = True
+        # Recovery: an owed episode from a tick whose mint never committed
+        # re-mints here. mint_stale_note is idempotent on
+        # (habit_key, start_tick), so a post-mint crash re-mints nothing.
+        # The owed dict carries its own episode identity, so a reset that
+        # ran after the crash cannot orphan it.
+        for key in sorted(streaks):
+            entry = streaks[key]
+            if entry["owed"] is not None:
+                events.append(self._owed_event(key, entry))
+        key = f"{FORMED_PREFIX}{trigger}:{action}"
+        meta = self.data["formed"].get(key)
+        if meta is not None and meta["strength"] >= HABIT_FIRE_STRENGTH:
+            live = state_habits.get(key) if state_habits is not None else None
+            if (live is not None
+                    and getattr(live, "last_used_tick", None) == int(tick)):
+                need_key, delta = _trigger_need_delta(
+                    trigger, dominant_need, need_deltas)
+                entry = streaks.get(key)
+                if entry is None:
+                    entry = {"count": 0, "start_tick": int(tick),
+                             "last_tick": int(tick), "last_delta": 0.0,
+                             "trigger_need": str(need_key),
+                             "owed": None, "noted_start": None}
+                    streaks[key] = entry
+                if delta < 0:
+                    # Improving firing: the routine worked this time —
+                    # reset the streak and re-arm for a future episode.
+                    # start_tick is left stale on purpose: it names the
+                    # first *counted* (non-improving) firing of the
+                    # streak, and is re-set when the next firing starts
+                    # counting. An owed episode from a crashed tick is
+                    # preserved untouched: the closed episode's note
+                    # still needs its mint (recovery above handles it;
+                    # the idempotent mint skips it if it already landed).
+                    entry["count"] = 0
+                    entry["last_tick"] = int(tick)
+                    entry["last_delta"] = delta
+                    entry["trigger_need"] = str(need_key)
+                else:
+                    if entry["count"] == 0:
+                        entry["start_tick"] = int(tick)
+                    entry["count"] += 1
+                    entry["last_tick"] = int(tick)
+                    entry["last_delta"] = delta
+                    entry["trigger_need"] = str(need_key)
+                    if (entry["count"] >= STALE_FIRINGS
+                            and entry["owed"] is None
+                            and entry["noted_start"] != entry["start_tick"]):
+                        # Episode closes: exactly one note per episode.
+                        # The owed dict is the write-ahead mark — the
+                        # caller saves BEFORE the mint transaction commits.
+                        entry["owed"] = {
+                            "trigger": meta["trigger"],
+                            "action": meta["action"],
+                            "trigger_need": entry["trigger_need"],
+                            "consecutive_firings": entry["count"],
+                            "last_delta": entry["last_delta"],
+                            "start_tick": entry["start_tick"],
+                            "end_tick": entry["last_tick"],
+                        }
+                        events.append(self._owed_event(key, entry))
+                changed = True
+        return events, changed
+
+    def _owed_event(self, key: str, entry: dict) -> dict:
+        """Build the mint event for an owed (closed or crash-pending) episode."""
+        event = {"habit_key": key}
+        event.update(entry["owed"])
+        return event
+
+    def ack_stale_notes(self, events: list) -> None:
+        """Latch noted episodes and clear owed marks after the mint commits.
+
+        Called after the mint transaction commits: ``noted_start`` latches
+        one note per episode (a later firing of the same streak mints
+        nothing until an improving firing re-arms with a new start_tick),
+        ``owed`` is cleared. Until this runs the file still holds the
+        owed marks, so a kill before the ack recovers them from the file
+        and the re-mint is idempotent. If the mint raised, this never
+        runs and the marks stay owed for the next tick.
+        """
+        for event in events:
+            entry = self.data["stale_streaks"].get(event["habit_key"])
+            owed = entry["owed"] if entry is not None else None
+            if (owed is not None
+                    and owed["start_tick"] == event["start_tick"]):
+                entry["noted_start"] = owed["start_tick"]
+                entry["owed"] = None
+
     # -- state projection ---------------------------------------------------
 
     def reconcile_state_habits(self, habits: dict) -> None:
@@ -476,6 +747,8 @@ class HabitFormationTracker:
             "formed": {k: self.data["formed"][k]
                        for k in sorted(self.data["formed"])},
             "archived": self.data["archived"],
+            "stale_streaks": {k: self.data["stale_streaks"][k]
+                              for k in sorted(self.data["stale_streaks"])},
         }
         body = json.dumps(ordered, ensure_ascii=False, indent=1)
         tmp = self.path.parent / (self.path.name + ".tmp")
@@ -536,3 +809,106 @@ def install_habit_observer(subject) -> None:
 
     _observed_select_conduct._habits_wrapped = True
     engine.select_conduct = _observed_select_conduct
+
+
+# -- stale-habit notes: canonical text, parsing, minting --------------------
+# (domain 17, 2026-10-12). Follows the interoceptive-realization
+# precedent: the record text is the canonical serialization — the only
+# writer is stale_note_text(), the only reader is the anchored fullmatch
+# below, so the identifier cannot drift from the writer.
+
+def stale_note_text(event: dict) -> str:
+    """First-person text for one closed stale-habit episode.
+
+    Names the action, the trigger, and the five-times-running failure,
+    then a machine sentence carrying everything the fitness function
+    needs to recover the episode from the record alone: the habit key,
+    the firing count, the trigger need, the last per-tick delta in a
+    fixed format, and the episode's first/last tick.
+
+    No contractions (the similarity vetoes tokenize on raw text —
+    regression genome), no wall clock, rounded fixed-format floats:
+    identical episodes mint byte-identical text.
+    """
+    return (
+        f"I have done {event['action']} when {event['trigger']} five times "
+        f"running and {event['trigger_need']} has not eased at all; "
+        f"this is not working. "
+        f"That is {event['consecutive_firings']} firings of "
+        f"{event['habit_key']}, {event['trigger_need']} moving "
+        f"{event['last_delta']:+.6f} on the last, "
+        f"ticks {event['start_tick']} to {event['end_tick']}."
+    )
+
+
+_STALE_NOTE_RE = re.compile(
+    r"I have done (\S+) when (\S+) five times running and (\S+) has not "
+    r"eased at all; this is not working\. "
+    r"That is (\d+) firings of (formed:\S+), (\S+) moving ([+-]\d+\.\d{6}) "
+    r"on the last, ticks (\d+) to (\d+)\.")
+
+
+def parse_stale_note_text(text) -> dict | None:
+    """Parse a stale-habit note's canonical text, or None.
+
+    Returns the episode identity (habit_key, start_tick) plus the
+    rendered fields. None means "not a stale-habit note" — never a
+    partial match: the fullmatch anchors both ends, and the habit key
+    must name exactly ``formed:<trigger>:<action>`` for the parsed
+    trigger/action (a serialization-identity check, not a substring
+    heuristic).
+    """
+    if not isinstance(text, str):
+        return None
+    m = _STALE_NOTE_RE.fullmatch(text)
+    if m is None:
+        return None
+    action, trigger, need1 = m.group(1), m.group(2), m.group(3)
+    habit_key, need2 = m.group(5), m.group(6)
+    if habit_key != f"{FORMED_PREFIX}{trigger}:{action}":
+        return None
+    if need1 != need2:
+        return None
+    return {"action": action, "trigger": trigger, "trigger_need": need1,
+            "consecutive_firings": int(m.group(4)), "habit_key": habit_key,
+            "last_delta": float(m.group(7)),
+            "start_tick": int(m.group(8)), "end_tick": int(m.group(9))}
+
+
+def is_stale_note_text(text) -> bool:
+    """Whether a record text is a domain-17 stale-habit note."""
+    return parse_stale_note_text(text) is not None
+
+
+def mint_stale_note(subject, event: dict) -> str:
+    """Append one stale-habit note through the subject's normal record path.
+
+    Waking-tick path only (cli._run_tick); the caller owns the
+    transaction so the record persists. Minting never advances the store
+    tick and never touches the trace: it is a write inside the existing
+    tick, not a new tick. Stamped generated_by="cognition"
+    (engine-originated, not authored), and enters view eligibility,
+    salience, and dedupe like any temporal record. Returns the record id.
+
+    Idempotent (write-ahead crash discipline, cf. mint_realization): when
+    a note for the same (habit_key, start_tick) is already in the store —
+    e.g. an owed mark re-minted after a kill between the mint and the
+    ack — the existing record's id is returned and nothing is appended:
+    exactly one record per closed episode. The check reads
+    subject.workspace.records, the in-memory list _add appends to, so
+    mints earlier in the SAME transaction are visible.
+    """
+    for record in subject.workspace.records:
+        if record.source != "temporal" or record.generated_by != "cognition":
+            continue
+        parsed = parse_stale_note_text(record.first_person)
+        if (parsed is not None
+                and parsed["habit_key"] == event["habit_key"]
+                and parsed["start_tick"] == event["start_tick"]):
+            return record.id
+    item = subject._add("temporal", stale_note_text(event),
+                        concepts=(event["trigger_need"],),
+                        generated_by="cognition",
+                        available_to_cognition=True,
+                        salience=1.0, intensity=1.0)
+    return item.id

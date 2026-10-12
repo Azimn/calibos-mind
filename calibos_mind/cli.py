@@ -284,6 +284,7 @@ def _run_tick(subject):
     # _restore would swap in a fresh tracker with an empty pending slot.
     needs_after = dict(subject.engine.state.needs)
     htracker = subject.workspace.habits_tracker
+    stale_events: list = []
     if htracker is not None:
         pending = htracker.take_pending()
         if (pending is not None and pending["tick"] == result["tick"]
@@ -294,12 +295,42 @@ def _run_tick(subject):
                 tick=pending["tick"], trigger=pending["trigger"],
                 action=pending["action"],
                 dominant_need=pending["dominant_need"], need_deltas=deltas)
-            if sidecar_changed:
+            # Stale-habit notes (domain 17, 2026-10-12): a formed habit
+            # firing by bypass while its trigger-relevant need does not
+            # improve for STALE_FIRINGS consecutive firings mints exactly
+            # one temporal record noting the failure. Record-only: no
+            # auto-removal, no strength change; authored habits never
+            # considered. Runs BEFORE the reconcile transaction below so
+            # the bypass stamp is read from live engine state (the stamp
+            # survives the payload round-trip, but live is authoritative);
+            # the write-ahead save makes the owed mark durable before any
+            # mint. Waking ticks only — _run_tick never serves dream
+            # ticks, and read-only commands never tick, so neither can
+            # mint or touch streak state.
+            stale_events, streaks_changed = htracker.observe_bypass_streak(
+                tick=pending["tick"], trigger=pending["trigger"],
+                action=pending["action"],
+                dominant_need=pending["dominant_need"], need_deltas=deltas,
+                state_habits=subject.engine.state.habits)
+            if sidecar_changed or streaks_changed:
                 htracker.save()
             if state_changed:
                 with subject._transaction():
                     subject.workspace.habits_tracker.reconcile_state_habits(
                         subject.engine.state.habits)
+    if stale_events:
+        # Crash discipline mirrors the interoceptive-realization
+        # write-ahead: the owed mark is already durable in the sidecar;
+        # mint_stale_note is idempotent on (habit_key, start_tick); the
+        # ack clears the mark only after the mint commits.
+        from .habits import mint_stale_note
+        with subject._transaction():
+            for event in stale_events:
+                mint_stale_note(subject, event)
+        fresh_htracker = subject.workspace.habits_tracker
+        if fresh_htracker is not None:
+            fresh_htracker.ack_stale_notes(stale_events)
+            fresh_htracker.save()
     # Inbox-expectation wiring (2026-09-26): stale unanswered prompts become
     # frozen-engine Expectation records so the engine's own temporal /
     # unresolved_concern machinery can resurface them. Waking ticks only —
