@@ -165,6 +165,36 @@ def test_affirm_logs_reconciliation_row():
         assert rec[0]["arm"] == "FULL" and rec[0]["wake_id"] is not None, rec
 
 
+def test_reconciled_arm_binds_at_briefing_not_at_affirm():
+    """Arm is per-wake: if the tick advances past a hash boundary between
+    briefing and affirm, the reconciled row must keep the briefing arm.
+
+    Regression test for the 2026-10-05 run, where ~20% of wakes were
+    mislabeled (briefed WITHHELD -> reconciled FULL and vice versa) because
+    the arm was recomputed from the live tick at affirm time.
+    """
+    with CliOnTmp():
+        cli._subject()
+        restore = _pin_arm("WITHHELD")
+        try:
+            rc, _ = _run("wake")
+            assert rc == 0, rc
+        finally:
+            restore()
+        # Simulate the tick advancing past a hash boundary: the arm function
+        # now returns the other arm, as _ablation_arm would for a new tick.
+        restore2 = _pin_arm("FULL")
+        try:
+            rc, _ = _run("wake", "--affirm", "picking up", "--carrying", "the report")
+            assert rc == 0, rc
+        finally:
+            restore2()
+        rows = _log_rows()
+        rec = [r for r in rows if r.get("event") == "reconciled"]
+        assert len(rec) == 1, rows
+        assert rec[0]["arm"] == "WITHHELD", rec  # briefing arm, not the flipped one
+
+
 def test_ablation_command_reports_readiness():
     with CliOnTmp():
         cli._subject()

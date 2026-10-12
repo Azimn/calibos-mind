@@ -11,6 +11,31 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-12 — ablation arm binds at briefing, not at affirm (protocol bug fix)
+
+### What
+Fixed a mislabeling bug in the carrying-list ablation logging (prereg
+2026-10-04): the arm was recomputed from the live engine tick at each log
+event, but a wake's tick advances 0–4 ticks between briefing and affirm.
+When the tick crossed a hash boundary, the reconciled row carried a
+different arm than the briefing — 9 of 46 wakes (20%) in the 2026-10-05 run
+were mislabeled (e.g. briefed WITHHELD, reconciled FULL). The arm is
+per-wake, not per-tick-event: the reconciled and closed-silently rows now
+use the arm bound at briefing (carried on the wake-liveness stamp),
+falling back to a fresh computation only if the stamp is missing. The
+append-only log is untouched — this corrects future rows only.
+
+### Why
+Found during the 46-wake adjudication analysis: any grouping by reconciled
+arm would misattribute a fifth of wakes. The briefing arm is the causally
+relevant one (it determined what the wake saw).
+
+### Where
+`calibos_mind/cli.py` (`cmd_wake` --affirm and --close paths);
+`tests/test_ablation.py::test_reconciled_arm_binds_at_briefing_not_at_affirm`
+(regression test — fails on the old code, passes on the new). 8/8 ablation
+tests green.
+
 ## 2026-10-12 — stale-habit notes: repeated failed attempts become representable (domain 17, builder, in loop)
 
 ### What

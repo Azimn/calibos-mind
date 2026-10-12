@@ -985,10 +985,16 @@ def cmd_wake(args):
                            unsure=getattr(args, "unsure", None) or ()):
                 prov.save()
         _stamp_wake_reconciled(r["tick"] if r is not None else eng["tick"], tid)
+        # The ablation arm binds at briefing, not at affirm: the wake's tick
+        # advances between the two, and recomputing the arm from the live tick
+        # mislabeled ~20% of wakes in the 2026-10-05 run (arm is per-wake, not
+        # per-tick-event). The briefing stamp carries the bound arm; fall back
+        # to a fresh computation only if the stamp is missing.
+        _bound_arm = (_read_wake_liveness() or {}).get("ablation_arm")
         _log_ablation({
             "event": "reconciled",
             "tick": eng["tick"],
-            "arm": _ablation_arm(eng["tick"]),
+            "arm": _bound_arm or _ablation_arm(eng["tick"]),
             "wake_id": tid,
             "carrying_given": bool(getattr(args, "carrying", None)),
             "unsure_given": bool(getattr(args, "unsure", None)),
@@ -1000,10 +1006,13 @@ def cmd_wake(args):
         # A deliberately silent wake still closes the liveness loop: the
         # stamp distinguishes "chose to say nothing" from "died mid-loop".
         _stamp_wake_reconciled(eng["tick"], silent=True)
+        # Arm binds at briefing; see the --affirm path for why the live tick
+        # must not be recomputed here.
+        _bound_arm = (_read_wake_liveness() or {}).get("ablation_arm")
         _log_ablation({
             "event": "closed_silently",
             "tick": eng["tick"],
-            "arm": _ablation_arm(eng["tick"]),
+            "arm": _bound_arm or _ablation_arm(eng["tick"]),
         })
         print("wake closed silently.")
         return 0
