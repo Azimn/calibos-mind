@@ -170,8 +170,10 @@ def cmd_init(args):
     if PROVENANCE.exists():
         PROVENANCE.unlink()
     # The confidence-decay policy sidecar must restart too: a streak carried
-    # across reseed would penalize a fresh mind's first stale prompt
-    # (same bug class as the salience reset above).
+    # across reseed would penalize a fresh mind's first stale prompt, and
+    # stale closed_expectations guard marks would suppress notes for the
+    # new incarnation's recycled expectation ids (same bug class as the
+    # salience reset above).
     from .inbox_expectations import POLICY_FILE_NAME
     expectation_policy = INBOX.parent / POLICY_FILE_NAME
     if expectation_policy.exists():

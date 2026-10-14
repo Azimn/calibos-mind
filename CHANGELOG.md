@@ -11,6 +11,90 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-13 — expectation-closure notes: a lapsed plan becomes a memory (domain 18, builder, in loop)
+
+### What
+When `inbox_expectations.sync` confirms an expectation with outcome
+`"lapsed"` AND its confidence is at the floor (0.15 — sustained neglect,
+streak >= 7), it mints exactly one temporal record noting the plan's
+death: expectation id, proposition summary (which question, queued when),
+created/due ticks, the final consecutive-expiry streak and confidence,
+outcome "lapsed". Lapses above the floor confirm silently; every other
+outcome (answered, let-pass, refused-stale-view, superseded) never mints;
+read-only commands, dream ticks, and `resolve()` never mint.
+
+### Why
+Domain 18 (Prospection), checks 14/1 — "updating plans as circumstances
+change" and "prospective memory". Plan-death was recorded only as a
+status-field tombstone (`status: confirmed, outcome: lapsed`): future
+cognition never encountered its own unfulfilled plans as memories. The
+closure note makes an unfulfilled plan a retrievable first-person memory
+so the mind can prospect over its own failures. The floor gate keeps the
+signal rare (plans that died after sustained neglect, not quick misses) —
+the same discipline as the habit-stale-note episode guard.
+
+### Where
+`calibos_mind/inbox_expectations.py`: `closure_note_text` /
+`parse_closure_note_text` / `is_closure_note_text` / `mint_closure_note`
+(canonical text, anchored parse, idempotent mint — the stale-habit-note
+precedent); the sync confirm-lapsed branch mints when the floor gate
+holds; the `closed_expectations` guard set lives in the
+`expectation_policy.json` sidecar (`_read_closed` / `_add_closed`;
+`_write_streak` now merges instead of clobbering); `init --force` wipes
+it with the rest of the sidecar (comment updated in `cli.py`).
+`tests/test_expectation_closure_note.py`: 17 tests, one per spec fitness
+item (7), plus text round-trip, mint idempotency, guard merge/no-op,
+a heartbeat end-to-end, a resolve-with-"lapsed" non-mint pin, 3 critic
+round-1 regression pins (two-notes-never-supersede, space-pid reader
+contract, space-pid end-to-end), and 2 regex guards (paren pid,
+forged machine sentence).
+
+### Judgment calls (spec was silent)
+- "Final streak" = the consecutive-expiry streak as of the lapse: the
+  sidecar value at sync start plus this sync's own expiries, computed
+  inside the transaction so the note text is deterministic. It is the
+  global track record at death, not a per-expectation counter (the
+  expectation carries its own final confidence, rendered `%.6f`).
+- The note is stamped `generated_by="cognition"`, salience 1.0,
+  intensity 1.0, concepts=(pid,) — mirrored from the stale-note
+  precedent so it enters view eligibility, salience, and dedupe like any
+  temporal record.
+- `resolve()` never mints, even handed outcome="lapsed" directly: the
+  spec's mint path is the sync confirm-lapsed branch only.
+- Sidecar load stays fail-closed (malformed guard degrades to empty, not
+  a raise) — this module's discipline, not the habits sidecar's
+  fail-loud one; the idempotent mint is the backstop against a lost
+  guard mark.
+
+### Revert
+Delete the minting code + guard state (the clearly-marked block at the
+end of `inbox_expectations.py` plus the `_read_closed` / `_add_closed`
+helpers and the guard lines in `sync`), remove this entry's shipped line
+(keep a reverted line), full suite green.
+
+### Round 2 (builder/critic loop, 2026-10-13)
+The critic's round-1 attack battery returned two concrete failures, both
+fixed in the code (not the tests):
+- Consolidation archived the notes it exists to keep: two floor-confidence
+  lapses through the real `sync` path produced `dedup`/`supersede`
+  proposals (jaccard 93%, containment 96%). `calibos_mind/consolidate.py`
+  now has a `_closure_note_pair` carve-out mirroring `_realization_pair`:
+  the near-dup and deep passes skip pairs where both texts are closure
+  notes; the exact-dup hash sweep still applies (byte-identical ⟺ same
+  episode ⟺ crash-window double-mint). `mint_closure_note`'s docstring
+  no longer claims plain dedupe eligibility.
+- Writer/reader contract on whitespace pids: `closure_note_text` could
+  mint notes for `"prompt 01 01"`-style pids that `parse_closure_note_text`
+  then rejected, breaking fitness item 1 and blinding the idempotent-mint
+  backstop. The pid/eid groups in `_CLOSURE_NOTE_RE` are now
+  whitespace-tolerant non-greedy `(.+?)` / `(inbox:.+?)`; the
+  `eid == "inbox:"+pid` identity cross-check plus the prose/machine
+  tick/streak agreement still pin the only self-consistent parse (pinned
+  by `)`-containing and forged-machine-sentence pid tests).
+Folded the critic's 3 failing tests into
+`tests/test_expectation_closure_note.py` as regression pins, plus 2 more
+(paren-pid round-trip, forged machine sentence) guarding the new regex.
+
 ## 2026-10-12 — ablation arm binds at briefing, not at affirm (protocol bug fix)
 
 ### What

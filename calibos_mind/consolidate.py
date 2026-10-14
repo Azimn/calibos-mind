@@ -83,6 +83,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .attribution import external_attributed
+from .inbox_expectations import is_closure_note_text
 from .interoception import is_realization_text
 
 
@@ -107,6 +108,33 @@ def _realization_pair(a: "_Rec", b: "_Rec") -> bool:
     where "one copy is enough" is true.
     """
     return is_realization_text(a.text) and is_realization_text(b.text)
+
+
+def _closure_note_pair(a: "_Rec", b: "_Rec") -> bool:
+    """Both records are domain-18 expectation-closure notes.
+
+    Closure-note texts are machine-serialized plan-death markers
+    (inbox_expectations.is_closure_note_text — an anchored
+    serialization-identity check, not a substring heuristic): two distinct
+    texts are distinct lapsed-expectation episodes by construction, each
+    naming its own expectation id. The near-dup rationale ("the same fact
+    worded twice") and the supersede rationale ("the same subject stated
+    again later — newer wins") can therefore never honestly apply to such
+    a pair; the templated wording defeats the similarity gates
+    systematically (subject overlap ~71%, body Jaccard ~69-82% with zero
+    negation markers for the polarity vetoes to catch), and accepting
+    would archive the very memory the mutation exists to keep. Per the
+    regression genome, a wrong archive is the hazard and a missed
+    consolidation is the safe direction, so closure-note pairs are
+    skipped in the near-dup and deep passes. The exact-dup hash sweep
+    above still applies: the realistic crash-window double-mint is
+    byte-identical, and "one copy is enough" is true there. (One
+    direction only: exact_hash normalizes case and punctuation, so
+    case/punctuation-variant pids can collide in the sweep — a
+    characterization, not a hazard; the engine mints sequential
+    lowercase pids.)
+    """
+    return is_closure_note_text(a.text) and is_closure_note_text(b.text)
 
 # -- tuning (from the deep-dive §3e verdict table) ------------------------
 
@@ -701,6 +729,8 @@ def scan(records: list[_Rec], store_tick: int, journal: dict,
             continue
         if _realization_pair(a.rec, b.rec):
             continue
+        if _closure_note_pair(a.rec, b.rec):
+            continue
         if a.rec.source != b.rec.source:
             continue
         union = a.tokset | b.tokset
@@ -755,6 +785,14 @@ def scan(records: list[_Rec], store_tick: int, journal: dict,
             # contradiction-flag either (the template carries zero negation
             # markers, so the polarity-mismatch flag path could not honestly
             # fire for such a pair anyway).
+            continue
+        if _closure_note_pair(a.rec, b.rec):
+            # Distinct serialized plan-deaths: each names its own
+            # expectation id by construction. The templated wording
+            # defeats the similarity gates the same way realization
+            # texts do, so the pair is skipped wholesale — no supersede,
+            # and no contradiction-flag (zero negation markers, so the
+            # polarity path could not honestly fire anyway).
             continue
         if len(a.subject) < 2 or len(b.subject) < 2:
             continue
