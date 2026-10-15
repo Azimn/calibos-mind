@@ -15,6 +15,8 @@ indefinitely. Quick reference:
     mind dream [--ticks N]             sleep: dream ticks, no outside world; body/tick/conduct frozen, fragments logged not thought
     mind recall [n]                    review recent dream fragments
     mind resolve <id> [--released]     close a commitment (done, or released)
+    mind intend "text" [--due TICKS] [--importance 0.5]
+                                     register a self-authored commitment (actor self)
     mind status [--raw]              tick, felt need bands (exact floats under --raw), open loops, inbox depth
     mind review [n]                    recent private thoughts
     mind drift [--window N]            persona-drift signals (grown salience share, trigger KL)
@@ -31,6 +33,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import secrets
 import sys
 from datetime import datetime
@@ -772,6 +775,44 @@ def cmd_resolve(args):
     return 0
 
 
+def cmd_intend(args):
+    """Register a self-authored commitment (Domain 19, 2026-10-14): the mind
+    binds itself to a plan. This is the only write path for self-authored
+    commitments: actor and beneficiary are always "self", passed explicitly
+    rather than trusted to the engine default so the ledger can never drift
+    silently. Due is a relative offset in ticks; importance is clamped to
+    [0,1] by the frozen engine's own _clamp (never by a wrapper shadow —
+    one clamp rule, not two)."""
+    text = args.description.strip()
+    if not text:
+        # Genome: silent defaults — an empty commitment refuses LOUDLY,
+        # stderr, nonzero exit, before the store is even opened.
+        print("refused — empty commitment; nothing recorded.", file=sys.stderr)
+        return 1
+    if not math.isfinite(args.importance):
+        # Same rule: NaN/inf is not a clampable value, it is garbage —
+        # refuse loudly rather than letting the engine's _clamp turn it
+        # into a quiet zero or pass NaN into the ledger.
+        print(f"refused — --importance must be a finite number, "
+              f"got {args.importance!r}; nothing recorded.", file=sys.stderr)
+        return 1
+    subject = _subject()
+    tick = subject.engine.state.tick
+    due = None if args.due is None else tick + args.due
+    with subject._transaction():
+        item = subject.continuity.create_commitment(
+            "self",
+            text,
+            beneficiary="self",
+            tick=tick,
+            due_tick=due,
+            importance=args.importance,
+        )
+    # Unique-prefix form, exactly the handle `mind resolve` accepts.
+    print(f"intended {item.id[:8]}: {text[:80]} (actor=self)")
+    return 0
+
+
 def cmd_status(args):
     subject = _subject()
     state = subject.inspect()
@@ -1461,6 +1502,17 @@ def main(argv=None):
                    help="release it instead of marking it done")
     p.add_argument("--note", default="", help="outcome note for the record")
     p.set_defaults(func=cmd_resolve)
+
+    p = sub.add_parser("intend",
+                       help="register a self-authored commitment (actor self)")
+    p.add_argument("description", help="what I bind myself to do")
+    p.add_argument("--due", type=int, default=None, metavar="TICKS",
+                   help="relative due offset in ticks: due_tick = current tick "
+                        "+ TICKS (default: no due tick)")
+    p.add_argument("--importance", type=float, default=0.5,
+                   help="importance, clamped to [0,1] by the engine "
+                        "(default 0.5)")
+    p.set_defaults(func=cmd_intend)
 
     p = sub.add_parser("status", help="what is on my mind")
     p.add_argument("--raw", action="store_true",

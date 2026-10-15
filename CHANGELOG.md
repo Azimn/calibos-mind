@@ -11,6 +11,67 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-14 — `mind intend`: the mind binds itself to a plan (domain 19, builder, in loop)
+
+### What
+New wrapper CLI command `mind intend "description" [--due TICKS]
+[--importance 0.5]` — the only write path for self-authored commitments.
+It registers actor `"self"` / beneficiary `"self"` in the continuity ledger
+via the frozen engine's `continuity.create_commitment` (no engine change),
+prints the new id in the unique-prefix form `mind resolve` accepts.
+
+- `--due`: relative offset, `due_tick = current_tick + TICKS`; none by default.
+- `--importance`: float; the engine's own `_clamp` puts it in [0,1] (one clamp
+  rule, not two — the wrapper does not shadow-clamp).
+- Empty/whitespace-only description refuses LOUDLY: stderr, nonzero exit,
+  before the store is even opened (genome: silent defaults). Non-finite
+  `--importance` (NaN/inf) refuses the same way — garbage is not clampable.
+
+### Why
+Domain 19 (Agency), check 4 "No self-initiated projects" — ABSENT: the ledger
+held two `actor: "world"` test artifacts, both closed; the mind had never
+bound itself to a plan. The engine's endogenous machinery already treats open
+commitments as first-class citizens (`_open_records` yields them,
+`_project_temporal` mints escalating grades for due ones, `live_open_keys`
+counts them for the UNRESOLVED_BOOST), and `relationships.get("self")` is
+None, so urgency degrades honestly to `importance*(.25 + .45*age/(age+6)) + .05`
+— modest, no invented attachment. Existing `mind resolve` (kept/released)
+already closes them. Deliberately not included: auto-promotion of thought
+text into commitments, any engine/venv change.
+
+### Fitness (all on synthetic /tmp stores; tests/test_intend.py, 11/11)
+1. Exact ledger fields (status/actor/beneficiary/created/due tick/importance);
+   printed id resolves via `mind resolve <prefix>`.
+2. Defaults: `due_tick` None, importance 0.5; engine clamps `--importance 1.5`
+   to 1.0.
+3. Empty description → stderr, nonzero exit, ledger unchanged; NaN importance
+   same.
+4. Kept/released closure through the existing resolve paths with unchanged
+   insight weights (release stores "released", never "broken").
+5. Endogenous parity: open self-commitment surfaces in `_open_records` as
+   `commitment:<id>` with 0 < urgency ≤ 1; a 6-ticks-past-due self-commitment
+   mints a grade-2 temporal record ("I have been waiting and still have no
+   confirmation: ") with `concern_links=("commitment:"+id,)`, byte-for-byte
+   the same treatment as a world-actor control at identical due/importance.
+6. `live_open_keys` includes the open self-commitment's id (both shapes);
+   closing removes it.
+7. Read-only sweep (`drift`, `status`, `consolidate --list`, `recall`,
+   `review`, `inbox`) and dream ticks mint no commitments.
+8. `init --force` clears the commitment ledger (verified: the DB payload is
+   deleted wholesale, so no stale binding survives reseed).
+9. Full suite green; engine and cartridge byte-identical (git diff touches
+   only `calibos_mind/cli.py`, `tests/test_intend.py`, this file).
+
+### Revert signal
+- A commitment minted by any path other than `mind intend`.
+- A self-commitment with wrong actor/beneficiary, or a duplicate mint for
+  one invocation.
+- `init --force` leaving a stale commitment behind.
+- Any existing test regresses.
+- In vivo: self-commitments opened but never resolved/released across the
+  window (binding without follow-through is theater — the fitness window
+  judges). assess_after: 2026-10-28.
+
 ## 2026-10-13 — expectation-closure notes: a lapsed plan becomes a memory (domain 18, builder, in loop)
 
 ### What
