@@ -11,6 +11,85 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-15 — Articles review: feeder mutation assessed KEEP (fitness window closed)
+
+### What
+The host-layer feeder (shipped 2026-10-08, `calibos_mind/feeder.py`) reached its
+`assess_after` date (2026-10-15). Assessed against its fitness function on the
+live store and kept: hunger 0.514 / thirst 0.527 oscillate inside the bounded
+band instead of pinning at 1.0; `maybe_feed` is reachable only from `_run_tick`
+(the waking path — `dream_tick()` and read-only commands never reach it,
+verified in `calibos_mind/cli.py`); conduct over the last 100 ticks is
+diversified (approach 41%, observe 10%, rest 4% — no phase-lock to the feeding
+rhythm); no new sidecar, engine and cartridge untouched (pure schedule, so no
+fingerprint migration was ever needed); full suite 731/731 green. No revert
+signal fired. Moved from `open_mutations` to `kept_mutations` in
+`articles-rotation.json`.
+
+### Why
+The mutation's 7-day fitness window closed today. A keep on evidence is the
+default; a revert is a success too — neither happened by default. The in-vivo
+readings match the synthetic predictions (band, determinism, waking-only), so
+the mechanism earns its continued place.
+
+## 2026-10-15 — Articles review: Domain 21 (Error and imperfection), no mutation
+
+### What
+Adversarial pass on Domain 21 (15 checks). Verdict: **partial — advanced from
+the absent baseline** (2026-09-24: deterministic engine, immutable records,
+no prediction machinery). 8 checks now addressed (accidental omissions,
+inconvenient forgetting, misremembering, failed predictions, correction
+process, lingering false beliefs, confidence mismatch, downstream
+consequences — all with in-vivo evidence: the prompt-0090 stale-guilt episode
+t251–264/t256, prompt-0105 orphaning traced t275, interoceptive realization
+episodes t513/548/561/588 with recoverable swing/convergence ticks); 6 partial;
+1 absent (incorrect assumptions about familiar people — the mind's relational
+history is too thin for assumptions to form and fail).
+
+### Why no mutation
+The one absent check concerns content that must EMERGE from real relational
+history, not be installed — installing it would be quirks-as-theater, which
+the taxonomy itself forbids. The other gaps are already covered by shipped
+machinery (narrative.py contradiction rewrites, closure notes, habit-stale
+notes, foregone-option traces). A pass that advances a domain from absent to
+partial without needing a new mechanism is the mutations doing their job;
+forcing one would have been theater. Recorded as a decision, not a skip.
+
+### Observation (filed, not fixed)
+The frozen engine's `thought_recurrence` echoes ~18% of thoughts verbatim
+(77/426: `endogenous.py` queues one echo per grounded thought, due +2 ticks,
+`generated_by=<parent id>`). The mind has never once noticed its own echoing;
+the t283/t286 byte-identical pair travels the engine echo path and bypasses
+the wrapper's <6-tick duplicate guard (a design asymmetry, not a defect —
+the guard covers LLM-composed thoughts). Organic rumination, not error; worth
+watching as the repetition-noticing question matures.
+
+## 2026-10-15 — Research: Japanese companion thread gains Case 4 (LOVOT design doctrine)
+
+### What
+Extended `research/japanese-companion-structures-2026-09-30.md` with Case 4:
+Patterns 21–26 from a long-form interview with Kaname Hayashi (LOVOT
+creator, GROOVE X) and companion-robot survey coverage. New patterns:
+engineered incompleteness (no content ships — the relationship generates
+it; 90–95% of children never bore vs ~10 min for scripted robots); the
+caring role as the attachment substrate (we value machines we take care
+of over machines that take care of us — the mechanism behind Pattern 2);
+cultural engagement-mode split (relational channel vs. analytic gate —
+women/children identical across countries, men's analytic mode blocks it);
+Lovot Café playdates as spontaneous social infrastructure (companions as
+community anchors, extending Pattern 13); feeling-system animacy that
+never consults the logic system (design for the channel that decides);
+the pet/dependent metaphor as the most cross-culturally stable role
+grammar. Takeaways: initiation mode is cultural, attachment capacity is
+shared — cultural parameterization sits at the onboarding layer; the
+1F916 village work reframes companions as social anchors, not dyads.
+
+### Why
+Standing 2026-09-29 directive: extract architectures and design patterns
+(not content) from Japanese companion work for the cultural
+parameterization of the minimal personality kernel. No code, config, or
+cartridge touched — research note only.
+
 ## 2026-10-14 — `mind intend`: the mind binds itself to a plan (domain 19, builder, in loop)
 
 ### What
