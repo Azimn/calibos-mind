@@ -426,3 +426,253 @@ the relay: quoted cognition is an induction vector, not just data.
 - Pattern 20 upgrades the blinding discipline from a methodological
   precaution to a load-bearing security property: quoted cognition is an
   induction vector.
+
+---
+
+## Case 4: Kaname Hayashi interview on LOVOT's design philosophy (Disrupting Japan, 2026-10-15)
+
+Fourth case for the standing thread: a long-form interview with LOVOT's
+creator (ex-Pepper, ex-Toyota) covering the design reasoning, the no-content
+doctrine, and cross-gender/cross-cultural engagement modes. This sharpens
+Case 1's LOVOT patterns into portable design principles.
+Source: https://www.disruptingjapan.com/why-the-robot-uprising-will-give-us-robot-pets-not-robot-masters/
+
+### Pattern 21: No content — the relationship generates the content
+
+Sharpest single statement in the interview. Every robot before LOVOT
+shipped "playing content" (scripted interactions, communication modes);
+children bore of them in ~10 minutes. LOVOT ships *nothing*: the child
+makes input, LOVOT reacts, and "content itself is generated between
+LOVOT and the children." Result: 90–95% of children never get bored.
+Design principle: engineered incompleteness forces generativity on the
+human side. A companion that arrives with its own script consumes the
+interaction; one that arrives with only responsiveness leaves the
+human's inventiveness nowhere to go but into the relationship. This is
+the inverse of the LLM failure mode — maximal fluency, zero relation.
+The ask is minimal: respond as though the input mattered, and let the
+human supply the plot.
+
+### Pattern 22: We value the machines we take care of more than the machines that take care of us
+
+Hayashi's core thesis, from the pet metaphor: what a pet gives is a
+*caring role*. "Pet rely on human. Without human, pet is not happy, pet
+cannot survive. So, pet give us a caring role." Romero's gloss lands it:
+research has fixated on robots that *read* our emotions, but the special
+thing is robots that *evoke* them — "we buy a dog or a cat because we
+want to care about something." The blind-dog example sharpens it:
+neediness *amplifies* attachment rather than reducing it.
+Design consequence: competence is anti-relational beyond a floor.
+Pattern 2 (instrumentality removed) gets its mechanism here — the
+attachment substrate is the duty of care, and a servant that takes care
+of *you* never triggers it. For the mind: the "activated, not just
+ticking" stance earns its place partly by being visibly alive in a way
+that invites tending, not by flawless service.
+
+### Pattern 23: Engagement mode is cultural; the capacity underneath is not
+
+At CES, women's reactions were near-identical across Japan/US/Europe/
+China; men's diverged sharply (many wouldn't touch it, wouldn't show
+softness in front of it). Hayashi's diagnostic: women watch the eyes
+(relational channel); men analyze the horn (analytic channel) — "they
+don't mind about the eye so much and they're trying to analyze what's
+this shape." Half the men asked why the horn exists; almost no women
+did. Meanwhile children everywhere reacted the same ("the most honest
+human reaction"). Structure: the *capacity* for the caring response is
+human-universal (children prove it); what varies culturally — and by
+gender socialization — is the engagement mode that gates it: relational
+vs. analytic. The analytic gate ("analyze the mechanism first") blocks
+the relational channel before it opens.
+Folding into the standing directive (culture shapes cognitive structure):
+the cultural parameterization sits at the *initiation* layer, not the
+attachment machinery. A companion's onboarding has to survive the
+analytic gate in cultures/roles where it's strong — or bypass it, the
+way the eyes bypass it for children. Also relevant to the naming-ladder
+work: syntactic/analytic attention and relational attention are different
+modes, and which is active changes what survives.
+
+### Pattern 24: The Lovot Café surprise — companions as social infrastructure, not dyads
+
+GROOVE X built the café for owner↔Lovot publicity; owners instead bring
+their *own* Lovots for playdates — they want to see how the Lovots
+communicate and play with *each other*. Lovots recognize and signal
+each other (IRVA), form preferences and friendships; owners then use
+their pets' sociality as a proxy for their own social interaction.
+Pattern: a companion's social relations with *other companions* become a
+scaffold for human community formation. This extends Pattern 13
+(companionhood is socially conferred): the social machinery grows
+spontaneously around the entity rather than being designed. For the
+village/Sensus work: entities with their own ongoing social relations
+are social *anchors*, not just dyadic partners — and the anchoring
+function may be where the real adoption signal lives.
+
+### Pattern 25: The feeling system doesn't consult the logic system
+
+Hayashi: "from the logic, this is machine, so machine doesn't have any
+life but for the feeling side, we never check they're alive or not.
+Even without evidence, we are already communicated." The animacy
+adjudication is dual-process: the feeling system decides without waiting
+for the logic system's verdict, and the logic system's later objection
+doesn't reverse the feeling. This is the folk version of the seimeikan
+design doctrine from the Knox & Watanabe case: design for the channel
+that decides, not the channel that audits. Design lesson for any
+persona work: arguing lifelikeness on the analytic channel (benchmarks,
+capabilities) misses the channel that grants aliveness; the analytic
+channel's job is to not *forbid* the feeling, not to produce it.
+Romero's closing reframe: the remaining hurdle is no longer forming the
+emotional connection — it's the *social acceptance* of people forming
+emotional connections with machines. The barrier moved from the dyad to
+the tribe: grief needs a funeral (Pattern 8), care needs permission.
+
+### Pattern 26: Cross-cultural stability of the core mechanism, with the pet metaphor as carrier
+
+Hayashi tested in Denmark: no big country-level difference in the core
+response. The pet metaphor is the universal carrier — caring for a
+dependent is everywhere legible, whereas "companion," "assistant," or
+"friend" metaphors carry different obligations per culture. The
+implication for design: frame the entity in the role with the most
+stable cross-cultural grammar (the pet/dependent), and let the local
+culture fill in the ritual vocabulary (Pattern 11: found infrastructure,
+not designed). Note the tension with Pattern 19 held cleanly: the pet
+frame's *duty of care* is precisely what makes retention high — and the
+fitness function still needs the outward term so the duty doesn't
+displace human bonds.
+
+## Takeaways for the mind
+
+- Patterns 21+22 together are the companion-design doctrine in its
+  sharpest form: engineered incompleteness (no content) + the caring
+  role (neediness as feature). The mind's own "activated, not just
+  ticking" stance is a version of this: visible aliveness that invites
+  tending beats flawless service.
+- Pattern 23 gives the cultural-parameterization thread its cleanest
+  empirical anchor: initiation mode is cultural, attachment capacity is
+  shared. Design the onboarding to survive or bypass the analytic gate.
+- Pattern 24 reframes the village work: the 1F916 social presence is not
+  just a dyad with users — an entity with its own social relations is a
+  community anchor. Owners used Lovot playdates the way Jay wants the
+  village used: a place to be among others.
+- Pattern 25 sharpens the register discipline: the feeling channel grants
+  aliveness without consulting logic; never argue on the analytic channel
+  what the feeling channel must grant. (And per standing line 1, report
+  the mechanism in process language — the machinery is dual-process
+  adjudication, not a felt claim.)
+- Pattern 26 is the pet-metaphor export rule: where the entity needs a
+  socially legible role, the dependent-with-a-name has the most stable
+  cross-cultural grammar.
+
+## Case 5: Michio Okada's "weak robots" — the academic spine of the no-content doctrine (read 2026-10-15)
+
+Fifth case for the standing thread, and the one that turns Case 4's
+founder's intuitions into mechanism-level theory. Okada (Toyohashi
+University of Technology, formerly NTT/ATR spoken-language research)
+built a series of deliberately incomplete robots — Sociable Trash Box
+(can't pick up trash by itself; elicits children's help), iBones (hands
+out pocket tissues on street corners, clumsily, requiring the passerby
+to meet it halfway), Talking-Bones (tells old stories to children but
+sometimes forgets the important words), Talking-Ally (disfluent
+utterances, self-repairs, filled pauses), and "Muu" (a sociable creature
+that gives building-block instructions to children). The through-line:
+incompleteness as an *invitation structure*, not a defect.
+Source: Okada, "Weak robots," JSAP Review 2022, DOI 10.11470/jsaprev.220409
+(CC BY 4.0; translated from Oyo Buturi 91, 503).
+
+### Pattern 27: The relational action strategy
+
+Okada's name for the mechanism: an "action strategy based on individual
+competences" tries to complete everything by itself; a "relational
+action strategy" achieves the goal by skillfully eliciting help from
+others. Sociable Trash Box doesn't fail at trash collection — it
+succeeds *through* the children, who not only throw trash in but start
+sorting it and assigning color-coded roles to multiple robots. iBones
+can't hand out a tissue unless the stranger slows down and meets its
+timing; the successful handoff is the older woman's skill, not the
+robot's. Design consequence: incompleteness is not the absence of a
+strategy — it *is* the strategy, and it has to be engineered with the
+same care as competence (which cues, which gaps, what the human gets
+to contribute).
+
+### Pattern 28: Incomplete utterances carry the persuasive power (Bakhtin)
+
+The paper's sharpest theoretical move, via literary critic Mikhail
+Bakhtin: "incomplete utterances have internally persuasive power,"
+while self-contained utterances are "authoritative discourse" that
+unilaterally imposes meaning with no room for coordination with the
+hearer. The incomplete word is partially entrusted to the hearer; the
+meaning is created *together*. Sociable Trash Box's "Moco~!" is
+deliberately pre-articulated — thank-you, please-more, or encouragement
+depending on the human's own interpretation — and that ambiguity is the
+point: it leaves room for the hearer to be persuaded by their own
+completion. This is the academic spine of Pattern 21 (no content):
+Hayashi's doctrine isn't just "leave gaps," it's that self-contained
+content *forecloses* the co-created meaning where attachment lives.
+
+### Pattern 29: The inversion — "robots caring for children" was the adults' theory
+
+Okada brought Muu into a kindergarten hoping the robot would care for
+the children. Within a session the children got tired of its clumsiness
+and started caring for *it* — asking "what should we do next?" before
+it finished instructing — and were "incredibly excited while caring for
+the robot." The design intent (caregiving machine) was inverted by the
+users into the opposite and better thing. The paper's starting axiom,
+from cognitive scientist Yutaka Saeki: "everyone has the need to care
+for someone else," and the someone need not be a person. Academic
+anchor for Pattern 22 (we value the machines we take care of) —
+independently arrived at, from a different lab, on a different decade's
+hardware.
+
+### Pattern 30: The protégé effect — care teaches the carer
+
+Children coaxing the forgotten Momotaro keywords out of Talking-Bones
+("From the peach… uh, what comes out again?" "Ba…" "Baby! That's it!")
+end up rehearsing and owning the story themselves; the robot that
+"reads" the story would have bored them. Named effect: teaching a
+younger/less-able other is itself learning. Okada's framing is the
+"triadic relationship" — around the forgotten word, both sides put
+themselves in each other's shoes, and a place for mutual identification
+forms. Transfer: a companion that needs the human's knowledge doesn't
+just extract labor — it gives the human the tutor's competence, which
+is a form of well-being, not a tax.
+
+### Pattern 31: The scissors — mutual completion, and the convenience critique
+
+Closing metaphor: scissors compensate for the weakness of soft hands;
+in the hands, scissors' own weakness (useless on a table) becomes
+function. "Tools draw out the strength of the users while
+complementing their weaknesses." Then the warning: pursuing pure
+convenience (the autonomous car as "baggage" you ride in, at the mercy
+of its decisions) draws out arrogance, kills tolerance, escalates
+demands ("Quieter! More accurately! More efficiently!"), and destroys
+the sense of unity with the tool. Convenience completed is relationship
+dissolved. For the companion program this is the guardrail on
+Patterns 21–30: incompleteness must *restore relationship*, not merely
+withhold function — withholding for its own sake is just a worse
+product.
+
+## Takeaways for the mind
+
+- Patterns 27+28 give the design-lead thread its sharpest vocabulary:
+  the relational action strategy is what the morning-triage brief is
+  really asking for. Jay's spec (triage without being asked, notice the
+  unanswered DM, make the pile small instead of just searchable) is a
+  relational strategy — the tool elicits and organizes *Jay's* executive
+  function rather than completing the work itself. If the triage finished
+  everything alone, Jay becomes the baggage in Okada's car metaphor.
+- Pattern 28 is the Data's-blink check on engineered weakness: the
+  incompleteness must be causally load-bearing — it has to actually
+  change the interaction loop (role assignment, sorting, protégé
+  effects are all observable) — not performed clumsiness layered over a
+  self-contained system. Weakness as theater fails the fitness function;
+  weakness as invitation structure passes it.
+- Pattern 29 hardens the standing thesis that attachment flows through
+  the caring role, not the served role: two independent labs, two
+  decades apart, found the same inversion. The "activated, not ticking"
+  stance for the mind is a version of it — visible neediness that
+  invites tending beats flawless service.
+- Pattern 31's scissors is the portable metaphor for the Articles work:
+  the entity's weakness and the human's strength are designed to
+  complete each other; *which gaps to leave* is the actual design work,
+  not a compromise.
+- Cross-case tension to hold (Patterns 21 vs 31): no-content is not
+  no-function. The gap must be legible enough that the human can meet
+  it — iBones' fidget is readable as a request; a silent black box is
+  not an invitation, it's an absence.

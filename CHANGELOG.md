@@ -11,6 +11,36 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-15 — Research: Japanese companion thread gains Case 5 (Okada's weak robots)
+
+### What
+Extended `research/japanese-companion-structures-2026-09-30.md` with Case 5:
+Patterns 27–31 from Michio Okada's "Weak robots" (JSAP Review 2022, CC BY 4.0,
+read in full this session). New patterns: the relational action strategy
+(achieve goals by skillfully eliciting help — Sociable Trash Box, iBones —
+vs. the individual-competence strategy); Bakhtin's incomplete utterances
+as the mechanism spine of the no-content doctrine (incomplete words
+entrust meaning to the hearer; meaning is co-created — vs. authoritative
+discourse which forecloses it); the Muu inversion ("robots caring for
+children" was the adults' theory; the children cared for the robot and
+were excited by it — independent anchor for Pattern 22); the protégé
+effect (children rehearsing Momotaro to help forgetful Talking-Bones end
+up owning the story — care teaches the carer); the scissors metaphor
+(tool's weakness and hand's weakness complete each other) plus the
+convenience critique (pure convenience draws out arrogance, kills
+tolerance, dissolves relationship — withholding function is not the same
+as inviting relation). Takeaways: the morning-triage spec is a relational
+strategy — a triage that finished everything alone would make Jay the
+baggage in Okada's car metaphor; incompleteness must be causally
+load-bearing (observable loop change), not performed clumsiness —
+Data's-blink check on engineered weakness.
+
+### Why
+Step-5 lived thread for this check-in: the ablation-arm reframe (withheld
+carrying list as engineered incompleteness) called for the academic spine
+of the no-content doctrine, and Okada's paper is exactly that. No code,
+config, or cartridge touched — research note only.
+
 ## 2026-10-15 — Articles review: feeder mutation assessed KEEP (fitness window closed)
 
 ### What
