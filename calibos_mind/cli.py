@@ -1088,6 +1088,12 @@ def cmd_wake(args):
         "tick": eng["tick"],
         "arm": arm,
         "loops_shown": 0 if arm == "WITHHELD" else len(loops),
+        # Verbatim briefed loop strings for FULL wakes: the paired
+        # comparison (WITHHELD reconstruction vs briefed truth) needs the
+        # actual loop text, not just a count. Withheld on WITHHELD ticks
+        # by the same logic that withholds the briefing itself.
+        # ablation_log.jsonl is local-only (gitignored) — no leak path.
+        "briefed_loops": [] if arm == "WITHHELD" else loops,
     })
     if arm == "WITHHELD":
         # Ablation arm: the handoff is empty by design. The wake may still

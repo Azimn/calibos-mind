@@ -11,6 +11,97 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-16 — Ambivalence runs now persist across process boundaries
+
+### What
+`calibos_mind/ambivalence.py`: the open contested-margin run is persisted
+to the `ambivalence.json` sidecar's new `open_run` field
+(`{contenders, channels, onset_tick, last_tick, margin_min, margin_max}`),
+written whenever the run changes (open/extend) and cleared on close.
+`CalibosSubject._attach_ambivalence` resumes the persisted run onto the
+subject via the new `resume_open_run()` — only when no live in-memory run
+exists, so in-process `_restore` never clobbers the fresher copy, and
+never writing the sidecar (pure re-attachment). `_OpenRun` gained
+`to_dict()`/`from_dict()` with strict validation (a malformed persisted
+run is ignored, never fabricated). Staging order mirrors the existing
+discipline: note-before-setattr on open, note-offset-before-clear on
+close, persist after the subject run exists. `mind init --force` already
+unlinks the sidecar, so `open_run` is wiped with it; `reset()` clears it
+too. Wrapper-layer only; engine and cartridge byte-identical.
+
+### Why
+In-vivo evidence (ticks 574–650): 57 onset markers vs 7 offset markers —
+24 fractured same-key consecutive-tick onset pairs. The 2026-10-03 fitness
+demands onset tick, offset tick, and margin min/max recoverable from the
+stream alone; across process boundaries the old code restarted every run
+fresh, so margin evolution and offset ticks were unrecoverable and the
+stream misrepresented multi-tick runs as repeated one-tick onsets
+(domain 22, check 9: behavioral consequences traceable across time). This
+completes the mechanism's own stated recoverability requirement — a
+mechanical gap, not a new mechanism, and not theater. Crash discipline:
+the persisted run can never produce a double-onset for the same tick —
+on resume the first contested tick with the same key extends rather than
+re-emitting onset. One-tick runs keep existing behavior (onset stands
+alone, no offset, no residue). Read-only commands and dream ticks never
+touch the sidecar (byte-identical, verified by test).
+
+### Tests
+New battery `tests/adversarial/test_builder_ambivalence_run_persistence_r1.py`
+(17 tests, synthetic /tmp stores only): two-process replay -> exactly one
+onset + one offset (onset_tick=1, offset_tick=4, last_tick=3, margin
+min/max); one-tick run -> one onset, no offset, no residue; kill between
+persist and flush -> resume extends, never a second onset for the same
+tick; contender change across the boundary -> "changed" offset + new
+onset; 10-tick in-memory run unchanged (2026-10-03 fitness); read-only
+sweep + dream ticks leave the sidecar byte-identical and the resumed run
+still extends afterward; `init --force` wipes `open_run`; plus adversarial
+cases (malformed/corrupt persisted runs, failed persist keeps the live
+run, `_restore` never clobbers, three-process ping-pong, bypass close
+across a boundary, cap eviction preserves `open_run`, `reset()` clears it,
+resume is pure re-attachment). Full existing suite green.
+
+### Round 2 (2026-10-16) — critic r1 fix: producer-invariant validation
+Round-1 `from_dict` accepted producer-impossible shapes (empty/wrong-arity
+key tuples, inverted margins, negative ticks): the critic demonstrated
+these fabricate stream corruption on resume — orphan offsets naming an
+onset_tick with no onset marker, and margin-inverted offsets (both verbatim
+revert signals). `_OpenRun.from_dict` now enforces the producer invariants:
+exactly-2 string tuples for contenders/channels, `margin_min <=
+margin_max`, `onset_tick >= 0` (and `last_tick >= onset_tick`), ticks and
+margins non-bool — raising ValueError so `resume_open_run` ignores the
+malformed run and the next contested tick opens a fresh run. This cannot
+regress honest behavior: no `to_dict` output can violate these
+(`round()` is monotone, `extend` keeps min/max ordered). Two regression
+tests added to the battery (now 19); the critic's 8-test malformed-shape
+battery is 8/8 green.
+
+### Revert signal
+Duplicate onsets for one tick; an offset naming an onset_tick with no
+onset marker in the stream; `open_run` surviving `init --force`;
+read-only or dream commands writing the sidecar; any existing test
+regresses; in vivo: onset/offset ratio not moving toward balance across
+the window. Revert = remove the `open_run` persistence (field
+ignored/deleted, in-memory behavior restored).
+
+### assess_after
+2026-10-30 (registered in articles-rotation.json by the daily review).
+
+## 2026-10-16 — Ablation arm: briefed loop text now logged verbatim (FULL wakes)
+
+### What
+`mind wake`'s ablation "briefed" event in `calibos_mind/cli.py` now records
+`briefed_loops`: the verbatim loop strings shown on FULL wakes (empty list
+on WITHHELD ticks, by the same withholding logic as the briefing itself).
+
+### Why
+Running the arm's paired comparison this morning (WITHHELD reconstructions
+vs adjacent FULL affirm records, measured recall ~0.83) exposed that the
+only textual record of the briefed list was my own affirm paraphrase —
+affirm-to-affirm agreement, not reconstruction-vs-truth. Verbatim loop text
+in the append-only log gives future adjudication a real ground truth.
+`ablation_log.jsonl` is local-only (gitignored), so no leak path into the
+public architecture repo. All 8 `tests/test_ablation.py` pass unchanged.
+
 ## 2026-10-15 — Research: Japanese companion thread gains Case 5 (Okada's weak robots)
 
 ### What

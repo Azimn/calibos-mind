@@ -99,10 +99,19 @@ class CalibosSubject(EndogenousSubject):
         # install_observer is idempotent, so re-attaching is a no-op when
         # the instance is already observed.
         if self._ambivalence_path is not None:
-            from .ambivalence import AmbivalenceTracker, install_observer
+            from .ambivalence import AmbivalenceTracker, install_observer, \
+                resume_open_run
             self.workspace.ambivalence_tracker = AmbivalenceTracker(
                 self._ambivalence_path)
             install_observer(self)
+            # Run persistence across process boundaries (2026-10-16): a
+            # run that was open when the last process ended resumes onto
+            # the subject so the next waking tick extends or closes it
+            # honestly. Resume is a no-op when a live in-memory run
+            # already exists (in-process _restore must never clobber it)
+            # and never writes the sidecar (pure re-attachment), so
+            # read-only commands and dream ticks stay byte-identical.
+            resume_open_run(self)
 
     def _attach_counterfactual(self):
         # Foregone-option trace (see counterfactual.py). The tracker

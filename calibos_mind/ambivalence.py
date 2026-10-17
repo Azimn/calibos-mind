@@ -61,14 +61,20 @@ now consolidated into runs:
   (``CalibosSubject._restore`` carries it onto the fresh tracker), so
   an onset staged mid-tick is flushed by the tick's own flush and the
   stream never carries an orphan offset.
-- Run state is in-memory on the subject (NOT the tracker or the wrapper
+- Run state lives on the subject (NOT the tracker or the wrapper
   closure: ``_restore`` swaps in a fresh engine and tracker on every
   transaction, so subject-level state is the only surface that survives
-  a tick boundary). On process restart mid-tie the next contested tick
-  starts a fresh run — the earlier onset marker is already in the
-  sidecar, so the contest is never lost, only its continuity across the
-  restart. Read-only commands and dream ticks never create, extend, or
-  close runs.
+  a tick boundary). It is ALSO persisted: the sidecar's ``open_run``
+  field carries {contenders, channels, onset_tick, last_tick,
+  margin_min, margin_max}, written whenever the run changes (open/extend)
+  and cleared on close. On process restart mid-tie the persisted run
+  resumes onto the subject (``resume_open_run``), so the next contested
+  tick extends or closes it honestly instead of starting a fractured
+  fresh run — the 2026-10-03 fitness (onset tick, offset tick, margin
+  min/max recoverable from the stream alone) now holds across process
+  boundaries. Resume never clobbers a live in-memory run (in-process
+  ``_restore`` keeps the fresher copy). Read-only commands and dream
+  ticks never create, extend, or close runs, and never write the sidecar.
 
 Formulas copied from the frozen engine (digital_subject/engine.py,
 jelly_psiduck-0.2.0a2 snapshot, non-editable .venv install):
@@ -204,8 +210,15 @@ class _OpenRun:
     pair and absorbs every following contested tick with the same pair
     while the margin stays inside the deadband. It closes on the first
     tick that is not a continuation: clear margin, contender/channel
-    change, or channel-rule bypass. Deliberately never persisted — see
-    the module docstring for the cross-restart caveat.
+    change, or channel-rule bypass.
+
+    Persisted, not just in-memory (2026-10-16): the run is written to
+    the sidecar's ``open_run`` field whenever it changes (open/extend)
+    and cleared when it closes, so a standing tie survives process
+    boundaries. On tracker construction the persisted run is resumed
+    onto the subject (``resume_open_run``) — resume re-attaches it only
+    when the subject has no live in-memory run, so an in-process
+    ``_restore`` never clobbers the fresher live run.
     """
 
     __slots__ = ("contenders", "channels", "onset_tick", "last_tick",
@@ -232,6 +245,67 @@ class _OpenRun:
         self.margin_max = max(self.margin_max, float(margin))
         self.absorbed += 1
 
+    def to_dict(self):
+        """Serialize for the sidecar's ``open_run`` field (2026-10-16).
+
+        ``absorbed`` is deliberately not persisted: the one-tick vs
+        multi-tick distinction lives in ``last_tick > onset_tick``, which
+        is fully recoverable. Deterministic: rounded floats, no clock.
+        """
+        return {
+            "contenders": list(self.contenders),
+            "channels": list(self.channels),
+            "onset_tick": self.onset_tick,
+            "last_tick": self.last_tick,
+            "margin_min": round(self.margin_min, 4),
+            "margin_max": round(self.margin_max, 4),
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        """Rebuild a run from a persisted ``open_run`` dict.
+
+        Raises KeyError/TypeError/ValueError on malformed input — the
+        resume path treats any of these as "no resumable run". A missed
+        resume is always the safe direction; a fabricated one is the
+        hazard.
+        """
+        if not isinstance(data, dict):
+            raise TypeError("open_run must be a dict, got %r" % type(data))
+        contenders = data["contenders"]
+        channels = data["channels"]
+        onset_tick = data["onset_tick"]
+        last_tick = data["last_tick"]
+        margin_min = data["margin_min"]
+        margin_max = data["margin_max"]
+        # Producer invariant (round 2, critic r1): the producer only ever
+        # emits exactly-2 string tuples for contenders/channels, so any
+        # other arity/shape is hand-edited or bit-rotted input. A missed
+        # resume is always the safe direction; a fabricated one is the
+        # hazard.
+        if (not isinstance(contenders, (list, tuple))
+                or len(contenders) != 2
+                or not all(isinstance(c, str) for c in contenders)):
+            raise ValueError("malformed contenders")
+        if (not isinstance(channels, (list, tuple))
+                or len(channels) != 2
+                or not all(isinstance(c, str) for c in channels)):
+            raise ValueError("malformed channels")
+        # bool is an int subclass; ticks-as-bool is malformed input.
+        if (not isinstance(onset_tick, int) or isinstance(onset_tick, bool)
+                or not isinstance(last_tick, int) or isinstance(last_tick, bool)
+                or onset_tick < 0 or last_tick < onset_tick):
+            raise ValueError("malformed ticks")
+        if (not _finite_number(margin_min) or not _finite_number(margin_max)
+                or isinstance(margin_min, bool) or isinstance(margin_max, bool)
+                or float(margin_min) > float(margin_max)):
+            raise ValueError("malformed margins")
+        run = cls(contenders=contenders, channels=channels,
+                  tick=onset_tick, margin=float(margin_min))
+        run.last_tick = last_tick
+        run.margin_max = float(margin_max)
+        return run
+
 
 # Subject attribute holding the open run. Stored on the subject — not on
 # the tracker and not in the wrapper closure — because _restore swaps in
@@ -250,6 +324,39 @@ def open_run(subject):
     return getattr(subject, _RUN_ATTR, None)
 
 
+def resume_open_run(subject) -> bool:
+    """Re-attach a persisted open run onto the subject (2026-10-16).
+
+    Called from ``CalibosSubject._attach_ambivalence`` after the fresh
+    tracker is constructed and the observer re-installed. Resumes ONLY
+    when the subject has no live in-memory run: on a fresh process start
+    the persisted run is the only truth; inside a live process
+    ``_restore`` rebuilds the tracker on every transaction and the
+    in-memory run is fresher than its persisted copy (persist writes
+    happen synchronously with every run change), so a resume there must
+    never clobber it — a failed persist leaves the sidecar behind the
+    subject, and the safe direction is to keep the live run.
+
+    Never writes the sidecar: resume is pure in-memory re-attachment, so
+    read-only commands and dream ticks stay byte-identical. Returns True
+    iff a run was resumed. A malformed persisted run is ignored — the
+    next contested tick opens a fresh run. A missed resume is always the
+    safe direction; a fabricated one is the hazard.
+    """
+    if getattr(subject, _RUN_ATTR, None) is not None:
+        return False
+    tracker = getattr(subject.workspace, "ambivalence_tracker", None)
+    data = getattr(tracker, "open_run", None)
+    if data is None:
+        return False
+    try:
+        run = _OpenRun.from_dict(data)
+    except (KeyError, TypeError, ValueError):
+        return False
+    setattr(subject, _RUN_ATTR, run)
+    return True
+
+
 def _absorb_contested(subject, tracker, marker):
     """Fold one contested marker into the open run, or open a new one.
 
@@ -264,7 +371,12 @@ def _absorb_contested(subject, tracker, marker):
     BEFORE the run is recorded on the subject. If ``note()`` fails (the
     observer wrapper swallows the exception), no run may survive —
     otherwise the next contested tick would silently extend a run whose
-    onset never reached the stream.
+    onset never reached the stream. The persisted ``open_run`` is written
+    AFTER the subject run exists: persist-after-setattr mirrors
+    note-before-setattr, so a run can never be persisted without its
+    onset staged. A failed persist is swallowed the same way — a missed
+    persist is safe (the next process simply starts a fresh run), a
+    fabricated one is the hazard.
     """
     key = (tuple(marker["contenders"]), tuple(marker["channels"]))
     margin = marker["margin"]
@@ -277,6 +389,7 @@ def _absorb_contested(subject, tracker, marker):
             # check would spuriously close the run there.
             and abs(margin) <= CONTESTED_MARGIN):
         run.extend(marker["tick"], margin)
+        tracker.persist_open_run(run)
         return
     if run is not None:
         _close_open_run(subject, tracker, tick=marker["tick"],
@@ -284,9 +397,11 @@ def _absorb_contested(subject, tracker, marker):
     onset = dict(marker)
     onset["run"] = "onset"
     tracker.note(onset)
-    setattr(subject, _RUN_ATTR, _OpenRun(
+    run = _OpenRun(
         contenders=marker["contenders"], channels=marker["channels"],
-        tick=marker["tick"], margin=margin))
+        tick=marker["tick"], margin=margin)
+    setattr(subject, _RUN_ATTR, run)
+    tracker.persist_open_run(run)
 
 
 def _close_open_run(subject, tracker, *, tick, event_kind, reason):
@@ -303,7 +418,10 @@ def _close_open_run(subject, tracker, *, tick, event_kind, reason):
     offset is noted on the tracker BEFORE the run is cleared on the
     subject. If ``note()`` fails, the run stays open and a later close
     emits one offset for the whole span — never a dropped run silently
-    replaced by a fresh one.
+    replaced by a fresh one. The persisted ``open_run`` is discarded
+    AFTER the subject run is cleared: note-before-clear mirrors
+    note-before-setattr on the open path, so a real close is never
+    dropped from the stream in favor of the sidecar write.
     """
     run = getattr(subject, _RUN_ATTR, None)
     if run is None:
@@ -328,27 +446,39 @@ def _close_open_run(subject, tracker, *, tick, event_kind, reason):
             "margin_max": round(run.margin_max, 4),
         })
     setattr(subject, _RUN_ATTR, None)
+    tracker.discard_open_run()
 
 
 class AmbivalenceTracker:
     """Bounded local sidecar for contested-margin markers.
 
-    ``data`` is ``{"markers": [...]}``, newest last, capped at
-    AMBIVALENCE_CAP. The constructor only reads the sidecar; markers move
-    exclusively via ``note()`` + ``flush()`` on the waking-tick path
-    (``cli._run_tick``). Read-only commands never call either.
+    ``data`` is ``{"markers": [...], "open_run": {...} | None}``,
+    newest marker last, capped at AMBIVALENCE_CAP. The constructor only
+    reads the sidecar; markers move exclusively via ``note()`` +
+    ``flush()`` on the waking-tick path (``cli._run_tick``), and the
+    open run moves via ``persist_open_run()`` / ``discard_open_run()``
+    whenever a run opens, extends, or closes. Read-only commands never
+    call any of them.
     """
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.markers: list = []
         self._pending: list = []
+        self.open_run: dict | None = None  # persisted run dict, or None
         if self.path.exists():
             try:
                 loaded = json.loads(self.path.read_text(encoding="utf-8"))
                 raw = loaded.get("markers")
                 if isinstance(raw, list):
                     self.markers = [m for m in raw if isinstance(m, dict)][-AMBIVALENCE_CAP:]
+                raw_run = loaded.get("open_run")
+                if isinstance(raw_run, dict):
+                    # Kept raw and validated at resume time
+                    # (_OpenRun.from_dict): a malformed run round-trips
+                    # untouched rather than being silently dropped or
+                    # "repaired" into a fabricated run.
+                    self.open_run = raw_run
             except (ValueError, OSError):
                 pass
 
@@ -379,15 +509,43 @@ class AmbivalenceTracker:
         """Clear the sidecar (used when the store is reseeded).
 
         Stale contested margins must never attach to a new incarnation's
-        ticks — same bug class as the salience/familiarity resets.
+        ticks — same bug class as the salience/familiarity resets. The
+        persisted open run is cleared with the markers: a reseed starts
+        with no run at all (genome: sidecar/state reset on reseed).
         """
         self.markers = []
         self._pending = []
+        self.open_run = None
+        self.save()
+
+    def persist_open_run(self, run) -> None:
+        """Persist the open run to the sidecar (2026-10-16).
+
+        Called whenever the run changes (open/extend), from
+        ``_absorb_contested``. The sidecar is the crash-safe copy the
+        next process resumes from. A write failure propagates to the
+        observer wrapper, which swallows it — a missed persist is safe
+        (the next process starts a fresh run), a fabricated one is the
+        hazard.
+        """
+        self.open_run = run.to_dict()
+        self.save()
+
+    def discard_open_run(self) -> None:
+        """Clear the persisted open run (2026-10-16).
+
+        Called from ``_close_open_run`` after the subject run is cleared,
+        mirroring the note-before-clear staging order. A one-tick close
+        emits no offset marker but still discards the persisted run, so
+        no residue survives.
+        """
+        self.open_run = None
         self.save()
 
     def save(self) -> None:
         self.path.write_text(
-            json.dumps({"markers": self.markers}, ensure_ascii=False, indent=1),
+            json.dumps({"markers": self.markers, "open_run": self.open_run},
+                       ensure_ascii=False, indent=1),
             encoding="utf-8",
         )
 
