@@ -313,7 +313,9 @@ class CalibosSubject(EndogenousSubject):
         generated_by stamps the honest origin: "answered:<prompt-id>@<tick>"
         for inbox answers, "answered-external:<prompt-id>@<tick>" for answers
         to externally-authored prompts (`mind queue`), "voluntary" for
-        unprompted thinking, "cognition" for thoughts the engine's own
+        unprompted thinking, "voluntary:inspection" for unprompted thinking
+        that reports an instrument reading (`mind think --inspection`) —
+        thinker-composed, therefore still self-authored — and "cognition"
         heartbeat produced (e.g. a live model provider). Echoes that
         resurface while asleep are stamped "dream-derived" by _add, not here.
         Returns the thought's record id.

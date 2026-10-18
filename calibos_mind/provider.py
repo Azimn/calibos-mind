@@ -85,13 +85,15 @@ def check_prompt_fresh(payload: dict, sequence: int, records=None) -> None:
 
 
 # generated_by stamps for records the thinker composed themselves, via
-# inject_thought: "voluntary" (mind think), "wake" (mind wake --affirm),
+# inject_thought: "voluntary" (mind think), "voluntary:inspection"
+# (mind think --inspection: instrument-reading report, thinker-composed —
+# still self-authored), "wake" (mind wake --affirm),
 # "answered:<prompt-id>@<tick>" / "answered-external:<prompt-id>@<tick>"
 # (mind answer). Deliberately excluded: "cognition" (thoughts the
 # engine's own heartbeat produced — the thinker never composed them),
 # "dream-derived" (dream echoes — rehearsal, not composed thought), and
 # None (engine _add paths: perceptions, memory rehearsal, interoception).
-_SELF_AUTHORED_EXACT = frozenset({"voluntary", "wake"})
+_SELF_AUTHORED_EXACT = frozenset({"voluntary", "voluntary:inspection", "wake"})
 _SELF_AUTHORED_PREFIXES = ("answered:", "answered-external:")
 
 

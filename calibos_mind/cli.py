@@ -656,9 +656,14 @@ def cmd_answer(args):
 def cmd_think(args):
     from .provenance import ProvenanceTracker
     subject = _subject()
+    # --inspection keeps the voluntary think path byte-identical except the
+    # provenance stamp: "I inspected" is psychologically distinct from
+    # "I thought" and must be first-class, never reconstructed later.
+    stamp = ("voluntary:inspection" if getattr(args, "inspection", False)
+             else "voluntary")
     try:
         tid = subject.inject_thought(args.text, trigger_kind="voluntary",
-                                     generated_by="voluntary")
+                                     generated_by=stamp)
     except ValueError as exc:
         print(f"refused — {exc}; nothing recorded.")
         return 1
@@ -1448,6 +1453,12 @@ def main(argv=None):
 
     p = sub.add_parser("think", help="record a voluntary thought")
     p.add_argument("text")
+    p.add_argument("--inspection", action="store_true",
+                   help="stamp the thought as an inspection report "
+                        "(generated_by=\"voluntary:inspection\"): the thinker "
+                        "is reporting an instrument reading rather than "
+                        "composing a lived reflection; first-class, never "
+                        "reconstructed")
     p.add_argument("--weighed", action="append", default=None,
                    help="an alternative or consideration weighed while thinking "
                         "(repeatable); stored as thought provenance")

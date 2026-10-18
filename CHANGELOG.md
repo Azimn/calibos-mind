@@ -11,6 +11,59 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-17 — `mind think --inspection`: inspection-provenance stamp
+
+### What
+`mind think` gained an `--inspection` flag. When set, the thought records
+with `generated_by="voluntary:inspection"` instead of `"voluntary"`.
+Everything else about the think path is identical: 600-char cap, 6-tick
+duplicate refusal, +0.3 salience importance, provenance-tracker entry,
+printed tid.
+
+Rationale (articles-review domain 23 adversarial pass, spec at
+`research/specs/2026-10-17-inspection-provenance-stamp.md`): the voluntary
+path bypassed the provider's clean view contract — renderer-authored
+thoughts citing instrument readings ("Drift R = 0.980 at tick 103") were
+laundered into first-person memory under plain `voluntary`. "I inspected"
+vs "I thought" are psychologically different meanings (relay design
+principle: first-class, never reconstructed) collapsed into one stamp.
+Colon-subkind follows the existing precedent (`answered:prompt-0008@66`).
+History is append-only: past records are not relabeled.
+
+### Integration
+- `calibos_mind/cli.py` `cmd_think`: stamp chosen from
+  `getattr(args, "inspection", False)`; argparse flag on the `think`
+  subparser with help text naming the psychologically-distinct meaning.
+- `calibos_mind/provider.py`: `"voluntary:inspection"` added to
+  `_SELF_AUTHORED_EXACT` so an intervening inspection thought does not
+  stale a queued prompt's view — exactly like a plain voluntary thought.
+  Stamp-inventory comment updated. No behavior change for any other stamp.
+- `calibos_mind/subject.py` `inject_thought` docstring documents the new
+  subkind.
+- `calibos_mind/drift.py` untouched: the grown/authored split keys on
+  `== "cartridge"`, so the stamp stays "grown" with zero accounting change
+  (verified by test, not assumed).
+- `calibos_mind/attribution.py` untouched: `is_external_origin` is
+  prefix-based on `"answered-external:"`, so the stamp is non-external
+  (verified by test).
+
+Fitness: stale-view parity (queue → `--inspection` think → answer
+succeeds; plain-think control identical); drift/status/review stdout and
+the salience sidecar byte-identical on paired synthetic stores differing
+only in stamp choice; 600-char cap and 6-tick duplicate refusal apply
+equally; empty/whitespace refused nonzero with the ledger untouched;
+dream ticks and read-only commands never mint the stamp;
+`init --force` wipes stamped records like any other. New
+`tests/test_inspection_stamp.py` (14 tests, all /tmp synthetic stores).
+Wrapper-layer only; engine `.venv` and `calibos.toml` byte-identical;
+assess_after 2026-10-31.
+
+### Revert signal
+Stamp appears via any path other than `think --inspection`; any
+behavioral delta in views/drift/salience/consolidation between stamped
+and plain voluntary records; stale-view parity broken in either
+direction; any existing test regresses.
+
 ## 2026-10-16 — Ambivalence runs now persist across process boundaries
 
 ### What
