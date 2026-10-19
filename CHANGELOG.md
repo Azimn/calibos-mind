@@ -11,6 +11,76 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-18 — Consolidation journal durability: one-deep backup + integrity sentinel
+
+### What
+The consolidation proposal journal (`proposals/proposals.json`) now has
+silent-loss armor, after the Oct-17 incident where it vanished with zero
+trace — 943 pending proposals incl. 55 contradiction-flags — and `mind
+consolidate --list` just reported "no pending proposals".
+
+- `_save_journal` rotates a one-deep backup: the previous `proposals.json`
+  is copied byte-for-byte to `proposals.json.bak1` before the new primary
+  lands. Bounded to exactly one extra file, in the same gitignored
+  `proposals/` dir (the journal carries thought-text snippets, so the
+  backup must never go anywhere tracked or pushed).
+- `_save_journal` writes an integrity sentinel, `proposals/journal.seq`
+  (`{"seq": N, "mtime": T}`), recording the journal seq at each completed
+  save.
+- `load_journal` falls back to the backup when the primary is missing or
+  corrupt: returns the backup's proposals, emits a LOUD stderr notice
+  ("consolidation journal recovered from backup: N proposals restored"), and
+  restores the backup to the primary on write paths. With no usable backup
+  it returns an empty journal with a stderr diagnostic naming the cause and
+  the recovery (`mind consolidate` re-scan); when the sentinel says seq>0,
+  the diagnostic is the "journal lost" variant — never a silent empty.
+- `consolidate --list` passes `restore=False`: a corrupt/missing primary is
+  still shown from the backup, but read-only paths never write.
+- `mind init --force` wipes `proposals.json.bak1` and `journal.seq` along
+  with the journal (the existing whole-dir wipe already covered them; now
+  explicit per the sidecar-reset-on-reseed genome — stale proposal ids must
+  never attach to recycled experience ids).
+
+### Safety notes
+- A restored backup can name record ids from before a store change. The
+  pre-existing `accept()` guard still applies: `_verify_pair` hash-checks
+  the record text against the proposal's recorded hashes and leaves the
+  proposal pending (never burned) on any mismatch — a reseed wipes the
+  backup anyway.
+- `load_journal` writes at most the restored primary; it never rotates the
+  backup or touches the sentinel — only `_save_journal` does, so read-only
+  paths (drift, status, --list, recall) remain write-free on the journal.
+- 2026-10-18 fix (critic attack round 2): the restore is conditional and
+  atomic — the backup is staged to a tmp file and the primary is created
+  via `os.link` (fails with FileExistsError when the primary appeared in
+  the restore window; a corrupt primary is re-validated immediately before
+  overwriting), so a `_save_journal` that completes between the
+  missing/corrupt check and the restore (the wake + articles crons overlap
+  on `proposals/`) is never silently overwritten; the "recovered from
+  backup" notice prints only when a restore actually happened.
+- 2026-10-18 fix (critic attack round 3): the corrupt-path re-read ->
+  `os.replace` was still non-atomic across the check — a `_save_journal`
+  completing in that micro-window was silently clobbered. The restore's
+  re-validate -> replace now commits under a cooperative `flock` lockfile
+  (`proposals/.journal.lock`), which `_save_journal` also holds across its
+  own primary replace, so no racing save can land between the check and
+  the act; a racing save that completed before the locked re-validation is
+  observed and wins. `_save_journal` also rotates the backup only when the
+  existing primary validates — corrupt bytes are never rotated over a good
+  backup. The lock is held only across the commit syscalls (never the
+  staging/rotation copies or the pre-lock read), so an in-process racing
+  writer cannot deadlock on it; `flock` releases on process death, no
+  stale-lock lifecycle.
+
+### Tests
+`tests/test_consolidation_journal_durability.py` — 12 tests: first-save
+semantics, one-deep byte-identical rotation, sentinel tracking, restore from
+backup with stderr-not-stdout notice, corrupt-primary fallback, corrupt
+backup read as absence, sentinel-seq>0 "journal lost" diagnostic, plain
+first-run diagnostic, read-only sweep (drift/status/--list/recall) byte-
+unchanged, --list shows backup without rewriting, `init --force` wipes all
+three files. Full suite: 475 passed, 12/12 new green.
+
 ## 2026-10-17 — `mind think --inspection`: inspection-provenance stamp
 
 ### What

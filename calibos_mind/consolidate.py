@@ -73,12 +73,17 @@ mutation, the waker disposes.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
+import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -412,38 +417,294 @@ def _journal_path(base: str | Path) -> Path:
     return Path(base) / "proposals.json"
 
 
-def load_journal(base: str | Path) -> dict:
-    """Load (or initialize) the proposal journal. Never creates files."""
-    path = _journal_path(base)
+def _backup_path(base: str | Path) -> Path:
+    """The one-deep backup. Bounded to exactly one extra file; lives in the
+    same gitignored proposals/ dir (the journal carries thought-text
+    snippets, so nothing may go anywhere tracked or pushed)."""
+    return Path(base) / "proposals.json.bak1"
+
+
+def _sentinel_path(base: str | Path) -> Path:
+    """Integrity sentinel: records the journal seq at the last successful
+    save, so a silent loss of the primary (seq > 0, journal gone or
+    unreadable, backup gone) is diagnosable instead of invisible."""
+    return Path(base) / "journal.seq"
+
+
+def _journal_shape_ok(data) -> bool:
+    return isinstance(data, dict) and isinstance(data.get("proposals"), dict)
+
+
+def _read_backup(base: str | Path) -> dict | None:
+    """The one-deep backup, if it is a usable journal. A corrupt or
+    wrong-shaped backup reads as absence: a damaged backup is never
+    confused with a good one."""
+    path = _backup_path(base)
     if not path.exists():
-        return {"seq": 0, "proposals": {}}
+        return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError) as exc:
-        raise ConsolidationError(f"proposal journal unreadable at {path}: {exc}")
-    if not isinstance(data, dict) or "proposals" not in data:
-        raise ConsolidationError(f"proposal journal malformed at {path}")
+    except (ValueError, OSError):
+        return None
+    if not _journal_shape_ok(data):
+        return None
     data.setdefault("seq", 0)
     return data
 
 
+def _sentinel_seq(base: str | Path) -> int | None:
+    """seq recorded by the last completed save, or None when the sentinel is
+    absent or unreadable. A torn sentinel is read as absence, never as a
+    diagnosis."""
+    try:
+        data = json.loads(_sentinel_path(base).read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    seq = data.get("seq") if isinstance(data, dict) else None
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+        return None
+    return seq
+
+
+def _load_primary_validated(path: Path) -> dict | None:
+    """Re-read + re-validate the primary journal file right now. Returns
+    the journal dict when the file is present and well-formed, else None.
+    The race-window recheck: a primary that appeared (or was repaired) in
+    the restore window is authoritative."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    if not _journal_shape_ok(data):
+        return None
+    data.setdefault("seq", 0)
+    return data
+
+
+@contextlib.contextmanager
+def _journal_lock(base: Path):
+    """Cooperative inter-process mutex for the journal's commit steps.
+
+    Both cron writers (wake + articles) run this code, so an flock on a
+    shared lockfile makes the commit steps atomic w.r.t. the actual
+    threat: the restore's re-validate -> os.replace vs the save's
+    os.replace. flock releases on process death — no stale-lock
+    lifecycle to manage, and the lockfile's existence is meaningless
+    (only the open fd matters), so `init --force` wiping it is harmless.
+
+    Deliberately held ONLY across the commit syscalls, never across the
+    staging copy, the rotation copy, or the pre-lock re-validation read:
+    flock contends across separately-opened fds even within one
+    process, so holding it across any point where a racing writer can be
+    injected would deadlock that writer (it would block on the lock
+    while the holder waits for it to return). The pre-lock
+    re-validation is a pure read — excluding it loses nothing, because
+    the restore/save decision is made by the re-validation performed
+    under the lock.
+    """
+    lock_path = Path(base) / ".journal.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _restore_backup_conditionally(base: Path, path: Path,
+                                  expect_missing: bool) -> bool:
+    """Restore the backup to the primary only if the primary is still in
+    the state observed at the start of `load_journal`.
+
+    2026-10-18 fix (round 3): the wake + articles cron runs overlap on the
+    same proposals/ dir, so a concurrent `_save_journal` can complete
+    between the missing/corrupt check and the restore. The old
+    unconditional `shutil.copyfile` would then silently overwrite the
+    NEWER primary with the stale backup — the exact silent-loss incident
+    class this journal exists to kill. Round 2's re-validate-before-
+    replace shrank that window but left it non-atomic; round 3 closes it
+    with the cooperative journal lock below.
+
+    - Missing primary: the backup is staged to a same-dir tmp file and the
+      primary is created atomically (`os.link` tmp -> primary, which fails
+      with FileExistsError when the primary appeared in the meantime). A
+      racing save's newer primary is never touched.
+    - Corrupt primary: the primary is re-read + re-validated; the
+      re-validation and the overwrite then happen under the shared
+      journal lock (`_journal_lock`), which `_save_journal` also holds
+      across its own primary replace — so a racing save cannot land
+      between the check and the act. A racing save that completed at
+      any point before the locked re-validation is observed, wins, and
+      its newer primary is never overwritten.
+
+    Returns True iff a restore actually happened — stderr claims a
+    recovery only on True.
+    """
+    tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
+                                        prefix="proposals.restore.",
+                                        suffix=".tmp")
+    os.close(tmp_fd)
+    tmp = Path(tmp_name)
+    try:
+        shutil.copyfile(_backup_path(base), tmp)
+        if expect_missing:
+            try:
+                os.link(tmp, path)
+            except FileExistsError:
+                return False  # racing save won; its newer primary stands
+            return True
+        # Corrupt path. Unlocked re-validation first: a pure read, and a
+        # point where a racing save may already have landed (its valid
+        # primary is authoritative — return without touching anything).
+        # The lock is NOT held here: holding it across this read would
+        # deadlock a racing writer injected at this point.
+        if _load_primary_validated(path) is not None:
+            return False  # primary already healed; do not overwrite
+        with _journal_lock(base):
+            if _load_primary_validated(path) is not None:
+                return False  # racing save won; its newer primary stands
+            os.replace(tmp, path)
+            return True
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def load_journal(base: str | Path, restore: bool = True) -> dict:
+    """Load the proposal journal, with silent-loss armor.
+
+    Recovery rules (2026-10-18: the Oct-17 incident — the journal silently
+    vanished, and "no pending proposals" is indistinguishable from "the
+    journal was lost" without it):
+    - primary present and well-formed -> returned as-is;
+    - primary missing or corrupt, valid backup exists -> the backup is
+      returned, a LOUD stderr notice is emitted, and (unless
+      restore=False) the backup is restored to the primary before
+      returning — but only if the primary is STILL missing/corrupt at
+      restore time: a racing _save_journal's newer primary is never
+      overwritten, and stderr never claims a recovery that didn't happen;
+    - primary missing or corrupt, no usable backup -> an empty journal is
+      returned with a stderr diagnostic naming the likely cause and the
+      recovery (re-run `mind consolidate` scan). When the sentinel records
+      seq > 0, the journal demonstrably existed and was lost, and the
+      diagnostic says so — never a quiet empty.
+
+    restore=False is for read-only paths (`consolidate --list`): the backup
+    content is still returned and announced, but no file is rewritten —
+    read-only paths must never write.
+
+    This function writes at most the restored primary. It never rotates the
+    backup or touches the sentinel — only _save_journal does.
+    """
+    base = Path(base)
+    path = _journal_path(base)
+    missing = not path.exists()
+    corrupt: Exception | None = None
+    data = None
+    if not missing:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as exc:
+            corrupt = exc
+    if data is not None and not _journal_shape_ok(data):
+        corrupt = ValueError("not a JSON object with a 'proposals' map")
+        data = None
+    if data is not None:
+        data.setdefault("seq", 0)
+        return data
+    # Primary missing or corrupt: fall back to the one-deep backup.
+    backup = _read_backup(base)
+    if backup is None:
+        # No usable backup: diagnose loudly instead of failing quiet-empty.
+        sentinel = _sentinel_seq(base)
+        if sentinel is not None and sentinel > 0:
+            print(f"consolidation journal LOST: sentinel seq={sentinel} but "
+                  f"proposals.json is {'missing' if missing else 'unreadable'} "
+                  f"and no usable backup exists; store records intact; re-run "
+                  f"`mind consolidate` scan to regenerate proposals",
+                  file=sys.stderr)
+        else:
+            cause = ("proposals.json unreadable"
+                     if corrupt is not None else "no proposals.json yet")
+            print(f"no consolidation journal found ({cause}); store records "
+                  f"intact; re-run `mind consolidate` scan to regenerate proposals",
+                  file=sys.stderr)
+        return {"seq": 0, "proposals": {}}
+    n = len(backup.get("proposals", {}))
+    if not restore:
+        # Read-only path: announce the fallback, touch nothing.
+        print(f"consolidation journal recovered from backup: {n} proposals "
+              f"restored (read-only path: backup shown, primary not rewritten)",
+              file=sys.stderr)
+        return backup
+    base.mkdir(parents=True, exist_ok=True)
+    if _restore_backup_conditionally(base, path, expect_missing=missing):
+        # A restore really happened — the claim on stderr is earned.
+        print(f"consolidation journal recovered from backup: {n} proposals "
+              f"restored", file=sys.stderr)
+        return backup
+    # A racing _save_journal won the primary in the window between the
+    # missing/corrupt check and the restore. Its newer primary survives on
+    # disk — never overwritten. Return it, and never claim a recovery that
+    # didn't happen.
+    fresh = _load_primary_validated(path)
+    if fresh is not None:
+        return fresh
+    # Vanishingly rare: the primary disappeared again inside the race
+    # window. Return the backup content from memory, honestly.
+    return backup
+
+
 def _save_journal(base: str | Path, journal: dict) -> None:
-    """Atomic write (tmp + os.replace): single-writer, no torn journal."""
+    """Atomic write (tmp + os.replace): single-writer, no torn journal.
+
+    Durability (2026-10-18): before the new primary lands, the previous
+    proposals.json is rotated to the one-deep backup proposals.json.bak1 —
+    bounded to exactly one extra file, same gitignored dir (the journal
+    carries thought-text snippets; the backup must never go anywhere
+    tracked or pushed). The integrity sentinel journal.seq records the seq
+    at save time so a later silent loss is diagnosable.
+
+    2026-10-18 (round 3): the rotation copies the primary into the backup
+    ONLY when the primary validates — rotating corrupt bytes over a good
+    backup would destroy the one fallback the restore path depends on
+    (every write-path call site loads with restore=True first, so the
+    primary is valid here in the normal flow; the guard covers the
+    abnormal interleavings, e.g. a save racing a corrupt primary). The
+    final os.replace runs under the shared journal lock so a concurrent
+    restore's locked re-validate -> replace cannot interleave with it;
+    rotation stays outside the lock (it never threatens the restore's
+    atomicity, and locking it would serialize the two cron writers
+    around a plain copy — and deadlock an in-process racing writer).
+    """
     base = Path(base)
     base.mkdir(parents=True, exist_ok=True)
     path = _journal_path(base)
+    if path.exists() and _load_primary_validated(path) is not None:
+        shutil.copyfile(path, _backup_path(base))
     fd, tmp = tempfile.mkstemp(dir=str(base), prefix="proposals.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(journal, fh, ensure_ascii=False, indent=1)
             fh.write("\n")
-        os.replace(tmp, path)
+        with _journal_lock(base):
+            os.replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+    # Integrity sentinel: the journal seq at the moment of a completed
+    # save. Written only on the save path — read-only callers never touch
+    # it. A torn sentinel reads as absence (see _sentinel_seq).
+    _sentinel_path(base).write_text(
+        json.dumps({"seq": int(journal.get("seq") or 0),
+                    "mtime": time.time()}) + "\n",
+        encoding="utf-8")
 
 
 def pending_proposals(journal: dict) -> list[dict]:
@@ -862,7 +1123,8 @@ def dry_run(db_path: str | Path, journal_base: str | Path,
             archive_dir: str | Path) -> dict:
     """Scan the store read-only; persist new proposals to the journal.
 
-    The ONLY write this path performs is the proposal journal append.
+    The ONLY writes this path performs are the proposal journal save (and
+    its one-deep backup rotation + integrity sentinel, see _save_journal).
     No archive writes, no availability changes, no writes to mind.db —
     load_records() opens the database ``mode=ro``, so a write is not
     merely avoided but impossible.

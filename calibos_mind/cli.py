@@ -193,6 +193,10 @@ def cmd_init(args):
     from .interoception import InteroceptionTracker
     InteroceptionTracker(INTEROCEPTION).reset()
     if PROPOSALS.exists():
+        # Every file goes: proposals.json, proposals.json.bak1, and
+        # journal.seq (2026-10-18 journal durability). Stale proposal ids
+        # must never attach to recycled experience ids after reseed — same
+        # bug class as the salience reset.
         for child in PROPOSALS.iterdir():
             if child.is_file():
                 child.unlink()
@@ -1332,7 +1336,9 @@ def cmd_consolidate(args):
         return 1
     try:
         if args.list:
-            pend = C.pending_proposals(C.load_journal(PROPOSALS))
+            # Read-only: a missing/corrupt primary is shown from the backup
+            # (with a stderr notice) but never rewritten on this path.
+            pend = C.pending_proposals(C.load_journal(PROPOSALS, restore=False))
             if not pend:
                 print("no pending proposals.")
                 return 0

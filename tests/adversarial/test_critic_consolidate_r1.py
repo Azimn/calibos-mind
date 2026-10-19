@@ -40,7 +40,7 @@ import json
 import sqlite3
 import sys
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -138,8 +138,13 @@ def test_critic_ro_mode_actually_raises_on_write():
 
 
 def test_critic_dry_run_filesystem_delta_is_journal_only():
-    """Snapshot the whole tree: the dry-run's ONLY delta must be
-    proposals/proposals.json. No db change, no archive dir, no wal/shm."""
+    """Snapshot the whole tree: the dry-run's ONLY filesystem delta must be
+    journal-sidecar files (proposals.json + the 2026-10-18 durability
+    sentinel journal.seq + the round-3 cooperative lockfile .journal.lock;
+    a .bak1 appears only when a previous primary existed — none here).
+    No db change, no archive dir, no wal/shm: the dry-run guarantee is
+    about the STORE (mode=ro), not about the journal the scan is defined
+    to append to."""
     with CliOnTmp() as ctx:
         ctx.plant("The garden gate was left open again this morning.")
         ctx.plant("The garden gate was left open again this morning!")
@@ -149,7 +154,8 @@ def test_critic_dry_run_filesystem_delta_is_journal_only():
         after = ctx.tree()
         new = sorted(set(after) - set(before))
         changed = sorted(k for k in after if k in before and after[k] != before[k])
-        assert new == ["proposals/proposals.json"], (new, changed)
+        assert new == ["proposals/.journal.lock", "proposals/journal.seq",
+                       "proposals/proposals.json"], (new, changed)
         assert changed == [], changed
         assert not (ctx.tmp / "archive").exists(), "archive/ created on dry-run"
         arts = [k for k in after if k.endswith(("-wal", "-shm", "-journal"))]
@@ -559,13 +565,27 @@ def test_critic_rejected_ids_never_reused():
 
 
 def test_critic_malformed_journal_is_honest():
-    """Unparseable proposals.json -> clean error, no traceback, rc 1."""
+    """Unparseable proposals.json with no backup and no sentinel -> the
+    waker is told LOUDLY on stderr (cause + recovery), the path continues
+    with an empty journal, rc 0, no traceback.
+
+    Contract changed 2026-10-18 (journal-durability mutation): a corrupt
+    journal no longer wedges the adjudication queue with rc 1. The honesty
+    invariant is preserved as the loud diagnostic — a silent empty would
+    fail this test, which is exactly what the Oct-17 incident produced."""
     with CliOnTmp() as ctx:
         Path(cli.PROPOSALS).mkdir(parents=True, exist_ok=True)
         (Path(cli.PROPOSALS) / "proposals.json").write_text("{not json",
                                                             encoding="utf-8")
-        rc, out = ctx.run("consolidate", "--list")
-        assert rc == 1 and "unreadable" in out, out
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc, out = ctx.run("consolidate", "--list")
+        assert rc == 0, out
+        assert "no pending proposals" in out, out
+        stderr = err.getvalue()
+        assert "no consolidation journal found" in stderr, stderr
+        assert "re-run `mind consolidate` scan" in stderr, stderr
+        assert "Traceback" not in stderr + out
 
 
 # =====================================================================
