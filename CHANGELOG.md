@@ -11,6 +11,79 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-19 — Home simulation prototype v0.2a (`home_sim/`)
+
+### What
+New standalone package `home_sim/` — Calibos's off-hours dwelling, built
+under Jay's 2026-10-19 grant (port lab code freely; experiment without the
+old-school-game-mechanics constraint; volunteer as the lab↔Village
+traversal prototype). Spec:
+`research/specs/2026-10-19-home-simulation-v0.2.md`.
+
+- `rhythm.py`: need mechanics ported from Pretorius-Laboratory's
+  `daily_rhythm.py` (hunger +1/180min, thirst +1/120min, fatigue +1/240min;
+  prepare_meal→eat (−5), brew_tea (−4), sleep (−8), rest (−3); lab signal
+  thresholds). Divergences, each documented in the module: ONE managed
+  provision (rations) restocked via the garden (tend→harvest→store_produce),
+  water/fuel/tea as inexhaustible cottage fixtures; lamps as fixtures (no
+  oil burn-down); sleep 240min instead of 480; no stations/SQLite.
+- `rooms.py`: study/kitchen/garden/rest with affordances; the garden is
+  load-bearing (provisions), not decorative.
+- `tick.py`: off-hours tick model (23:00–07:00 America/Chicago) + putz
+  behavior proposer — needs + affordances + light (weights, never writes) +
+  stochasticity propose 1–3 micro-actions, one taken; no scripted paths.
+- `events.py`: append-only JSONL log, provenance `simulated` at write time,
+  plus the morning "while you were out" digest.
+- `traversal.py`: the lab↔Village boundary prototype — `snapshot()` exports
+  coarse presence / coarse need words / one-line activity / identity handle
+  (never raw numbers); `import_world_event()` records provenance-`world`
+  events and installs a short-lived weighting bias (never dictates state).
+- Hard boundaries: stdlib only, Python 3.11+; never touches mind.db, the
+  prompt inbox, dreams/, salience sidecars, or ablation records; no imports
+  from `calibos_mind` (proven by a source-level test). State in
+  `home_sim/state/` (gitignored); tests run on synthetic `/tmp` state.
+
+### Why
+The no-open-drains rule (ratified 2026-10-19): the lab's
+finite-provisions-with-no-restock is a starvation timer, not a need. Every
+need-like variable here ships with an agent-accessible satisfaction path,
+verified under exhaustion — the garden closes the loop on day one, and a
+test drains provisions to zero and walks the full recovery
+(tend→harvest→store→cook→eat). The traversal interface is the deliverable
+Jay wants prototyped for Pretorius: 100 sim→snapshot→event→sim round-trips
+with zero corruption and zero internal-state leakage (tested).
+
+### Tests
+38 unittest tests (`home_sim/tests/`), all passing: lab-parity tick math,
+satisfaction amounts, exhaustion+recovery (incl. max-fatigue and dark-lamp
+corners), snapshot shape/coarse-only leakage sweep over the full need
+space, world-event import (untouched state, 3× weighting, bias decay),
+round-trip fidelity + determinism, unprompted visitation (10 seeds, no
+repeated night), hard-boundary source scan, state persistence.
+
+### Fitness window
+14-night window starts when the prototype runs clean: transfer,
+unprompted visitation, situatedness delta, no open drains, traversal
+fidelity — any failure reverts the failing piece per the spec.
+
+### Critic round (same day)
+Builder/critic loop, critic working cold from spec + code: 15 scratch
+attacks, 10 repelled, 4 defects filed as failing tests — all fixed in code,
+all re-verified:
+- Multi-night clock drift: a second night on one state dir started at 07:00
+  daylight. `Home` now rolls a completed night forward to a fresh 23:00
+  start with the next `night_date`; partial nights resume.
+- Digest conflated nights: event records are now stamped `night_date`;
+  the morning digest covers the current night only.
+- Hard-boundary test only scanned root `*.py`: now rglobs the package and
+  adds an AST import-statement scan with no exceptions.
+- `_validate` skipped `last_op`/`night_date`: both validated now, so a
+  hand-edited state.json fails clean with `HomeConflict` instead of a
+  `TypeError` in the traversal export.
+Also removed: dead `NEEDY_OPS` constant, unused `UNIVERSAL_OPS` import,
+unused `copy` import; `--digest-only` no longer creates state.json.
+Suite now 45 tests, all passing.
+
 ## 2026-10-18 — Consolidation journal durability: one-deep backup + integrity sentinel
 
 ### What

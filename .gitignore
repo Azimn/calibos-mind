@@ -59,3 +59,8 @@ provenance.json
 # salt and the raw log stay on this machine.
 ablation_salt
 ablation_log.jsonl
+
+# Home simulation runtime state (2026-10-19): the sim's own off-hours state
+# file and event log. Local-only like the other runtime state above — the
+# architecture (home_sim/ code) is tracked; each night's lived state is not.
+home_sim/state/
