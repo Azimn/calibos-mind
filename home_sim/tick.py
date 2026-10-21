@@ -169,6 +169,10 @@ def _next_night(night_date: str) -> str:
     return (date.fromisoformat(night_date) + timedelta(days=1)).isoformat()
 
 
+def _prev_night(night_date: str) -> str:
+    return (date.fromisoformat(night_date) - timedelta(days=1)).isoformat()
+
+
 class Home:
     """One inhabitant's off-hours home. State lives in a directory
     (state.json + events.jsonl); nothing else on the machine is touched."""
@@ -229,9 +233,15 @@ class Home:
         return events
 
     def digest(self) -> str:
-        """Morning 'while you were out' digest: this night's events only."""
-        return summarize_night(
-            self.log.read_night(self.state["night_date"]))
+        """Morning 'while you were out' digest: this night's events only.
+        Loading a completed night rolls state forward to the next night, so
+        a morning read after roll-forward falls back to the night that just
+        completed — otherwise the digest is always empty by morning."""
+        night = self.state["night_date"]
+        events = self.log.read_night(night)
+        if not events:
+            events = self.log.read_night(_prev_night(night))
+        return summarize_night(events)
 
 
 def run_night(state_dir: str | Path, *, seed: int | None = None,

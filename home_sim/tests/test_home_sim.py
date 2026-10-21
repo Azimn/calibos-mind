@@ -497,6 +497,25 @@ class TestDigestPerNight(unittest.TestCase):
             total = sum(int(n) for n in re.findall(r"x(\d+)", did))
             self.assertEqual(total, n2)
 
+    def test_digest_after_rollforward_shows_completed_night(self):
+        """A morning read after the state rolled forward must digest the
+        completed night, not the fresh (event-less) one. Regression test:
+        --digest-only printed the empty message every morning."""
+        import re
+        with tempfile.TemporaryDirectory() as tmp:
+            h1 = Home(tmp, seed=1, night_date="2026-10-19")
+            h1.run(max_minutes=480)
+            n1 = len(h1.log.read_night("2026-10-19"))
+            self.assertGreater(n1, 0)
+            h2 = Home(tmp, seed=2)  # rolls to 2026-10-20, no run yet
+            self.assertEqual(h2.state["night_date"], "2026-10-20")
+            d = h2.digest()
+            self.assertNotIn("no off-hours activity", d)
+            did = next(l for l in d.splitlines()
+                       if l.strip().startswith("did:"))
+            total = sum(int(n) for n in re.findall(r"x(\d+)", did))
+            self.assertEqual(total, n1)
+
 
 class TestValidateStrict(unittest.TestCase):
     """_validate is the gate against hand-edited state: last_op and

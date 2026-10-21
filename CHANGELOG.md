@@ -11,6 +11,21 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-20 — home_sim morning-digest regression fix
+
+Morning wake-up found `python3 -m home_sim --digest-only` printing
+"(no off-hours activity recorded — simulated)" on night 1 of the 14-night
+fitness window, even though the night had run 39 ticks overnight. Root
+cause: `Home.__init__` rolls a completed night's state forward to the next
+`night_date` (fresh 23:00), but `digest()` read events for the *current*
+`state["night_date"]` — always the fresh, event-less night. Fix:
+`tick._prev_night()` added; `digest()` falls back to the completed night's
+events when the current night has none. Regression test added
+(`test_digest_after_rollforward_shows_completed_night`); all 46 tests pass.
+Night-1 digest now reads correctly: garden tended and harvested, produce
+stored, meal prepared and eaten, tea brewed — the no-open-drains loop
+(self-maintenance) running unprompted.
+
 ## 2026-10-19 — Home simulation prototype v0.2a (`home_sim/`)
 
 ### What
