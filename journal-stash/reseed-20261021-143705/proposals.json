@@ -1,0 +1,24 @@
+{
+ "seq": 1,
+ "proposals": {
+  "1": {
+   "id": 1,
+   "kind": "dedup",
+   "a": "experience-7",
+   "b": "experience-8",
+   "winner": "experience-7",
+   "loser": "experience-8",
+   "rationale": "experience-8 is identical to experience-7 after normalization; one copy is enough",
+   "reason": "identical after normalization; one copy is enough",
+   "confidence": 1.0,
+   "a_hash": "c8e8e84fa6f7f888a0d86213b8a10f6a",
+   "b_hash": "c8e8e84fa6f7f888a0d86213b8a10f6a",
+   "a_tick": 0,
+   "b_tick": 0,
+   "status": "accepted",
+   "created_tick": 0,
+   "resolved_tick": 0,
+   "rejected_reason": null
+  }
+ }
+}

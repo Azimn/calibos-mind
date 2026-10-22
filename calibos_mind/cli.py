@@ -52,6 +52,7 @@ FAMILIARITY = BASE / "familiarity.json"
 AMBIVALENCE = BASE / "ambivalence.json"
 COUNTERFACTUAL = BASE / "counterfactuals.json"
 HABITS = BASE / "habits-formed.json"
+DORMANCY = BASE / "authored-dormancy.json"
 PROVENANCE = BASE / "provenance.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
@@ -93,7 +94,8 @@ def _subject(provider=None):
                              familiarity_path=FAMILIARITY,
                              ambivalence_path=AMBIVALENCE,
                              counterfactual_path=COUNTERFACTUAL,
-                             habits_path=HABITS)
+                             habits_path=HABITS,
+                             dormancy_path=DORMANCY)
     if isinstance(provider, InboxCognition):
         # Stamp queued prompts with the store tick and record sequence at
         # queue time, so `mind answer` can refuse superseded views.
@@ -165,6 +167,13 @@ def cmd_init(args):
     # only.
     if HABITS.exists():
         HABITS.unlink()
+    # Authored-habit dormancy sidecar (2026-10-21): stale demotion flags
+    # and dormancy clocks must never attach to a reseeded incarnation's
+    # ticks (same bug class as the salience/familiarity resets above).
+    # Wiped BEFORE construction: the tracker fails loud on a corrupt
+    # sidecar, which would otherwise brick --force before the wipe ran.
+    if DORMANCY.exists():
+        DORMANCY.unlink()
     # Thought-provenance sidecar (2026-10-04): stale weighed/discarded/
     # carrying/unsure traces must never attach to a reseeded incarnation's
     # recycled ids (same bug class as the salience/familiarity resets
@@ -193,12 +202,21 @@ def cmd_init(args):
     from .interoception import InteroceptionTracker
     InteroceptionTracker(INTEROCEPTION).reset()
     if PROPOSALS.exists():
-        # Every file goes: proposals.json, proposals.json.bak1, and
-        # journal.seq (2026-10-18 journal durability). Stale proposal ids
-        # must never attach to recycled experience ids after reseed — same
-        # bug class as the salience reset.
-        for child in PROPOSALS.iterdir():
+        # Stale proposal ids must never attach to recycled experience ids
+        # after reseed (same bug class as the salience reset, 2026-10-18).
+        # 2026-10-21 journal survival: annihilation is not required to keep
+        # that invariant. Stash the journal under a dated directory OUTSIDE
+        # the wiped set (archive/ is wiped below too) and load nothing from
+        # it — the stash is for humans, never for the fresh incarnation.
+        # Fourth silent journal loss (2026-10-21 ~08:43) was a reseed-path
+        # wipe with no surviving copy; the second-location snapshot the
+        # human's agent added on 2026-10-20 is what made recovery possible.
+        stash = (BASE / "journal-stash" /
+                 datetime.now().strftime("reseed-%Y%m%d-%H%M%S"))
+        stash.mkdir(parents=True, exist_ok=True)
+        for child in sorted(PROPOSALS.iterdir()):
             if child.is_file():
+                shutil.copy2(child, stash / child.name)
                 child.unlink()
     if ARCHIVE.exists():
         for child in ARCHIVE.iterdir():
@@ -340,6 +358,51 @@ def _run_tick(subject):
         if fresh_htracker is not None:
             fresh_htracker.ack_stale_notes(stale_events)
             fresh_htracker.save()
+    # Authored-habit dormancy demotion (domain 27, 2026-10-21): an authored
+    # habit above the 0.65 bypass threshold that has not fired in
+    # DORMANCY_TICKS + 1 ticks loses the privilege (strength -> 0.64),
+    # with exactly one written note per demotion episode. A pre-demotion
+    # firing resets the dormancy clock, silently; demotion is a one-way
+    # ratchet — the flag latches permanently and no restore path exists.
+    # Waking ticks only
+    # — _run_tick never serves dream ticks, and read-only commands never
+    # tick, so neither can demote or mint. The formed: namespace is never
+    # touched (the formation tracker owns it). The firing proof is read
+    # from live engine state BEFORE the reconcile transaction below (the
+    # stamp survives the payload round-trip, but live is authoritative);
+    # the write-ahead save makes the owed mark durable before any mint.
+    demote_events: list = []
+    dtracker = getattr(subject.workspace, "dormancy_tracker", None)
+    if dtracker is not None:
+        demote_events, d_sidecar_changed, d_state_changed = \
+            dtracker.observe_tick(
+                tick=subject.engine.state.tick,
+                state_habits=subject.engine.state.habits)
+        if d_sidecar_changed:
+            dtracker.save()
+        if d_state_changed:
+            # Strength changes land through the freshly restored tracker's
+            # reconcile — the pre-transaction live state is discarded by
+            # _restore (same discipline as the formed-habit reconcile
+            # above): the sidecar is the bridge, and the firing stamp
+            # re-derives identically on the fresh state.
+            with subject._transaction():
+                subject.workspace.dormancy_tracker.reconcile_state_habits(
+                    subject.engine.state.habits,
+                    tick=subject.engine.state.tick)
+    if demote_events:
+        # Crash discipline mirrors the stale-note write-ahead: the owed
+        # mark is already durable in the sidecar; mint_demotion_note is
+        # idempotent on (habit_key, demoted_tick); the ack clears the mark
+        # only after the mint commits.
+        from .authored_dormancy import mint_demotion_note
+        with subject._transaction():
+            for event in demote_events:
+                mint_demotion_note(subject, event)
+        fresh_dtracker = subject.workspace.dormancy_tracker
+        if fresh_dtracker is not None:
+            fresh_dtracker.ack_demotion_notes(demote_events)
+            fresh_dtracker.save()
     # Inbox-expectation wiring (2026-09-26): stale unanswered prompts become
     # frozen-engine Expectation records so the engine's own temporal /
     # unresolved_concern machinery can resurface them. Waking ticks only —

@@ -11,6 +11,108 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-21 — authored-habit dormancy demotion (domain 27)
+
+Spec: `research/specs/2026-10-21-authored-habit-dormancy-demotion.md`.
+
+Authored habits sat above the frozen engine's 0.65 bypass threshold
+forever: `verify_before_claiming` (0.68) had never fired in 730 live
+ticks, yet could bypass deliberation on its next trigger with zero lived
+grounding. Installed automaticity without practice is the "born fully
+formed" symptom (domain 27 checks 3 and 10) with a live behavioral
+consequence.
+
+New module `calibos_mind/authored_dormancy.py` (pruning analog —
+childhood reflexes persist as tendencies but lose automaticity without
+practice): on waking ticks only, an authored habit with
+`tick - last_fired_tick > DORMANCY_TICKS` (300) and live strength >= 0.65
+demotes to exactly 0.64 (one notch below the bypass threshold), latches
+a `demoted` flag in the new `authored-dormancy.json` sidecar, and mints
+exactly one temporal record (`generated_by=cognition`) naming the habit
+key, the dormancy span, and the authored baseline. `last_fired_tick` is
+proven by the engine's own `last_used_tick` stamp == current tick (same
+proof as the stale-note tracker); a pre-demotion firing resets the
+clock — silently. Demotion is a one-way ratchet: the frozen engine
+stamps `last_used_tick` only inside the bypass branch (>= 0.65), so a
+0.64 habit can never produce the stamp that would restore it — no
+restore path is implemented, by design, and the demoted flag latches
+permanently. The note never promises restoration ("loses its automatic
+edge", never "for now"). Floor: never below
+0.64; the habit stays deliberation-eligible, only the bypass privilege
+is gated. The `formed:` namespace is never touched (the formation
+tracker owns it). Sidecar is local-only (gitignored), atomic-saved,
+fail-loud on corruption, wiped by `init --force`; read-only commands and
+dream ticks never write it. Crash discipline mirrors the stale-note
+write-ahead: owed mark saved before the mint, idempotent mint on
+(habit_key, demoted_tick), ack after commit.
+
+Wiring: `subject.py` gains `_attach_dormancy` (baselines from the
+cartridge `[habits]` entries, the toml as single source of truth),
+`workspace.py` gains `dormancy_tracker`, `cli.py` gains the `DORMANCY`
+sidecar path, the `--force` wipe, and the waking-tick block in
+`_run_tick`. `habits.py` module docstring updated: authored strength is
+an authored baseline, not a fixed constant (live strength may demote
+through dormancy; demotion is a one-way ratchet with no restore on
+firing).
+
+Tests: `tests/test_authored_dormancy.py`, 34 tests covering every
+fitness item — demotion at 400 dormant ticks with exactly one parseable
+record, no second record at tick 401, the ratchet (a hand-set
+post-demotion stamp restores nothing: strength stays 0.64, flag latched,
+no second record), the clock reset (firing at tick 250 -> no demotion at
+550, demotion at 551), crash recovery between sidecar save and reconcile
+(the owed note re-mints AND the projection re-derives, so the note is
+truthful), the strict dormancy bound, formed:-namespace immunity, the
+real engine's bypass branch flipping ASK->SEEK_CONTACT across the
+threshold, read-only/dream byte-identity, `init --force` wipe and
+corrupt-sidecar recovery, replay determinism, plus hostile tests
+(corrupt sidecars, floor, sub-threshold baselines, mint idempotency, owed
+recovery, note-text discipline). Full suite green.
+
+### 2026-10-21 (round 2) — ratchet + crash-recovery fix
+
+Critic round 2 returned two REDs; both fixed (no commit yet).
+
+RED 1 (code defect — crash divergence): a kill after the dormancy
+sidecar `save()` but before the reconcile transaction commits left
+`demoted=True` (+owed) in the file while the store still held the
+baseline strength. On the recovery tick the owed mark re-minted the
+note, but `observe_tick` returned `state_changed=False` (the demotion
+branch requires `not demoted`), so the strength projection was never
+re-derived — a minted note claiming a demotion that never behaviorally
+happened. Fix: `observe_tick` now returns `state_changed=True` when a
+demoted entry's live store strength != 0.64, so the caller's existing
+reconcile re-projects and converges the store to 0.64. Regression test:
+`test_crash_between_save_and_reconcile_reprojects_on_recovery`
+(reproduces the critic's scenario; asserts the recovery tick converges
+the store to 0.64 with the note truthful).
+
+RED 2 (spec incoherence — resolved by owning the ratchet): the
+restore-on-firing path was unreachable in vivo — the frozen engine
+stamps `last_used_tick` only in the bypass branch (>= 0.65), so a 0.64
+habit can never produce the stamp that would restore it. Per the revised
+spec, demotion is a one-way ratchet: the restore branch is removed
+entirely (dead code that can never execute in vivo is a liability), the
+demoted flag latches permanently, and the demotion note no longer
+promises restoration ("loses its automatic edge", never "for now").
+`habits.py` docstring and the `cli.py` wiring comment updated to the
+ratchet contract. The old restore test (test-premise drift — it hand-set
+an impossible stamp) is replaced by
+`test_hand_set_stamp_post_demotion_restores_nothing` and
+`test_pre_demotion_firing_resets_dormancy_clock`.
+
+Boundary note — resolved 2026-10-21 (design lead): the edge is
+`tick - last_fired_tick > DORMANCY_TICKS` (300); first demotion lands at
+span 301 (firing at tick 250 -> quiet at 550, demotion at 551). An earlier
+draft of the fitness example said 551/552 (span 302) — that was an
+arithmetic slip, not a principled choice; spec, code, docstrings, and
+tests now all agree on the 550/551 boundary. (This paragraph supersedes
+the round-2 boundary note as originally written.)
+
+Revert: delete `calibos_mind/authored_dormancy.py`, the `_attach_dormancy`
+call + `dormancy_path` plumbing, the `cli.py` block + `DORMANCY`
+constant, and the sidecar file. assess_after 2026-11-04.
+
 ## 2026-10-20 — home_sim morning-digest regression fix
 
 Morning wake-up found `python3 -m home_sim --digest-only` printing
@@ -3794,3 +3896,57 @@ PROPOSALS, ARCHIVE). Verified: critic's redirect tests green; full suite 473 pas
 pre-existing failure with live-file md5s byte-identical before/after. Noted follow-up: a
 conftest-level fixture auto-redirecting every sidecar path for any test touching `cli`
 would make this bug class structurally impossible; the regression genome now covers it.
+
+## 2026-10-21 — Reseed stashes the consolidation journal instead of annihilating it
+
+The proposals/ journal vanished for the fourth time (2026-10-21 ~08:43 CDT),
+the third wipe in four days. Mechanism now pinned: `cli.cmd_init --force`
+(the reseed path) deliberately unlinked every file in proposals/ — a
+2026-10-18 durability decision whose invariant is that stale proposal ids
+must never attach to recycled experience ids. Annihilation was never required
+to keep that invariant.
+
+Fix (wrapper layer): cmd_init --force now copies the journal to
+`BASE/journal-stash/reseed-<ts>/` before clearing proposals/. The stash is
+outside the wiped set (archive/ is wiped too) and is never loaded as the live
+journal — it exists for humans, not for the fresh incarnation. Fitness: a
+future reseed leaves a dated stash with byte-identical files; the fresh
+journal starts empty. Revert signal: any reseed that attaches stale ids, or
+any stash that the mind loads as live state.
+
+Regression tests: `tests/test_reseed_journal_stash.py` (2 tests, green) —
+stash created with byte-identical files, live journal cleared, and
+`C.load_journal` on the reseeded dir returns empty (stash never loaded).
+Sibling suites: test_init.py + test_habits.py, 43 passed.
+
+Recovery this incident: journal restored from the second-location snapshot
+added 2026-10-20 (`journal-snapshots/`), 438 proposals seq 438 verified.
+Unanswered: which process invoked the 08:43 reseed — the morning's
+authored-dormancy feature work is the leading candidate (its test helpers
+all redirect PROPOSALS correctly on inspection; no invoking test found).
+
+## 2026-10-21 (follow-up) — BASE added to CliOnTmp redirect sets
+
+While auditing every test helper's redirect tuple after the fourth journal
+loss, `tests/test_inbox_expectations.py` and
+`tests/test_expectation_closure_note.py` were found redirecting the sidecars
+but not `cli.BASE`. With the new reseed stash (see entry above) that would
+have written dated `journal-stash/` directories into the live checkout during
+routine runs — additive and never loaded, but untidy and a sign the path
+sets are drifting. Both `CliOnTmp` classes now redirect BASE to tmp; their
+40 tests pass. The conftest-level fixture (auto-redirect every cli path for
+any test touching cli) remains the structural fix for this whole bug class.
+
+## 2026-10-21 (afternoon) — Journal restored from the reseed stash; forensics retired
+
+The 14:23 CDT wake found proposals/ empty (dir mtime 09:35:41 CDT) and,
+per the forensics directive, did not silently restore. Reconstruction: the
+morning's investigation itself (sentinel sweep + helper audits, ~50 reseed
+invocations 09:27–09:39 CDT against the live checkout) re-wiped the live
+journal repeatedly — but every reseed after the stash fix landed preserved
+the journal in journal-stash/. Restored from
+journal-stash/reseed-20261021-143541/ (438 proposals, seq 438, verified).
+Empty stash dirs pruned; five content-bearing stashes kept as incident
+record. The wake cron's TEMPORARY FORENSICS block is retired (cause found,
+fix verified). Standing lesson: test-suite reseeds never run against the
+live checkout — the conftest fixture remains the structural fix.

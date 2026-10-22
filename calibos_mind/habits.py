@@ -2,11 +2,13 @@
 
 Domain 8 (Habits and procedural continuity) audit: the frozen engine fires
 cartridge habits inside the already-chosen intention channel when
-``habit.strength >= 0.65``, but strength is a fixed cartridge constant and
-the habit set is closed at two authored entries (``curious_question``
-0.72, ``verify_before_claiming`` 0.68). Repetition never makes behavior
-more automatic, and there are no bad habits — the two diagnostic gaps this
-module addresses.
+``habit.strength >= 0.65``. The two authored entries (``curious_question``
+0.72, ``verify_before_claiming`` 0.68) enter at those toml strengths as an
+*authored baseline* — the closed authored set; live strength may demote
+through dormancy (floor 0.64); demotion is a one-way ratchet with no
+restore on firing (see authored_dormancy.py). Repetition never makes behavior more automatic,
+and there are no bad habits — the two diagnostic gaps this module
+addresses.
 
 This installs the *mechanism* (formation, growth, disuse decay, removal),
 never the *symptom*: no habit is authored here. Habits crystallize from

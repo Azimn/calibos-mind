@@ -211,6 +211,10 @@ class CalibosWorkspace(SubjectiveWorkspace):
     # Attached by CalibosSubject when a habits sidecar path is configured.
     # None -> no habit formation tracking (plain engine behavior).
     habits_tracker = None
+    # Attached by CalibosSubject when a dormancy sidecar path is
+    # configured. None -> no authored-habit dormancy demotion (plain
+    # engine behavior: authored strengths stay at their toml baselines).
+    dormancy_tracker = None
     # The organism's display name, for the self-relevance retrieval gain
     # (see calibos_mind/selfgain.py). Class-level default None: a None
     # name only disables the name-mention signal, never a silent match.

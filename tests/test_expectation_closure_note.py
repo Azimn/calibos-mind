@@ -51,7 +51,7 @@ BASE = Path(__file__).resolve().parents[1]
 
 
 class CliOnTmp:
-    """Redirect the CLI's store paths at a synthetic tree (all 11, like the
+    """Redirect the CLI's store paths at a synthetic tree (all 12, like the
     consolidation tests — cmd_init clears ARCHIVE/PROPOSALS, so they must
     never point at the live dirs)."""
 
@@ -60,7 +60,11 @@ class CliOnTmp:
         self.saved = {}
 
     def __enter__(self):
-        targets = {"DB": self.tmp / "t.db",
+        # 2026-10-21: BASE redirected too — the reseed journal stash is
+        # written under BASE/journal-stash, which must never land in the
+        # live checkout during a routine test run.
+        targets = {"BASE": self.tmp,
+                   "DB": self.tmp / "t.db",
                    "INBOX": self.tmp / "inbox",
                    "DREAMS": self.tmp / "dreams",
                    "SALIENCE": self.tmp / "salience.json",

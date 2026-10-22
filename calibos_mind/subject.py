@@ -38,7 +38,7 @@ def validate_thought_text(text: str) -> str:
 class CalibosSubject(EndogenousSubject):
     def __init__(self, *args, salience_path=None, interoception_path=None,
                  familiarity_path=None, ambivalence_path=None, habits_path=None,
-                 counterfactual_path=None,
+                 counterfactual_path=None, dormancy_path=None,
                  **kwargs):
         self._salience_path = salience_path
         self._interoception_path = interoception_path
@@ -46,6 +46,7 @@ class CalibosSubject(EndogenousSubject):
         self._ambivalence_path = ambivalence_path
         self._habits_path = habits_path
         self._counterfactual_path = counterfactual_path
+        self._dormancy_path = dormancy_path
         self._dreaming = False
         super().__init__(*args, **kwargs)
         # Fresh stores get a stock workspace from __init__; existing stores are
@@ -63,6 +64,23 @@ class CalibosSubject(EndogenousSubject):
         self._attach_ambivalence()
         self._attach_counterfactual()
         self._attach_habits()
+        self._attach_dormancy()
+
+    def _attach_dormancy(self):
+        # Authored-habit dormancy demotion (see authored_dormancy.py). The
+        # tracker constructor only reads the sidecar; baselines come from
+        # the cartridge [habits] entries (the toml is the single source of
+        # truth — a cartridge change ships with a store migration, so the
+        # map is stable for the store's life). Demotions land exclusively
+        # via observe_tick() on the waking-tick path
+        # (cli._run_tick); read-only commands and dream ticks never write.
+        # Re-attached on every _restore like the habits tracker, for the
+        # same reason (a fresh engine instance per transaction).
+        if self._dormancy_path is not None:
+            from .authored_dormancy import AuthoredDormancyTracker
+            authored = {h.key: h.strength for h in self.cartridge.habits}
+            self.workspace.dormancy_tracker = AuthoredDormancyTracker(
+                self._dormancy_path, authored)
 
     def _attach_salience(self):
         if self._salience_path is not None:
@@ -184,6 +202,7 @@ class CalibosSubject(EndogenousSubject):
         if stranded_c:
             self.workspace.counterfactual_tracker._pending = stranded_c
         self._attach_habits()
+        self._attach_dormancy()
         # from_dict builds a fresh CalibosWorkspace, dropping ad-hoc
         # attributes — re-set the display name (see __init__).
         self.workspace.display_name = self._resolve_display_name()

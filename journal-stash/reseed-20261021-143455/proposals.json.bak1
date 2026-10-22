@@ -1,0 +1,43 @@
+{
+ "seq": 2,
+ "proposals": {
+  "1": {
+   "id": 1,
+   "kind": "contradiction-flag",
+   "a": "experience-1",
+   "b": "experience-2",
+   "winner": null,
+   "loser": null,
+   "rationale": "r",
+   "reason": "",
+   "confidence": 0.3,
+   "a_hash": "h1",
+   "b_hash": "h2",
+   "a_tick": 1,
+   "b_tick": 2,
+   "status": "pending",
+   "created_tick": 1,
+   "resolved_tick": null,
+   "rejected_reason": null
+  },
+  "2": {
+   "id": 2,
+   "kind": "contradiction-flag",
+   "a": "experience-1",
+   "b": "experience-2",
+   "winner": null,
+   "loser": null,
+   "rationale": "r",
+   "reason": "",
+   "confidence": 0.3,
+   "a_hash": "h1",
+   "b_hash": "h2",
+   "a_tick": 1,
+   "b_tick": 2,
+   "status": "pending",
+   "created_tick": 1,
+   "resolved_tick": null,
+   "rejected_reason": null
+  }
+ }
+}
