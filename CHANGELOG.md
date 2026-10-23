@@ -11,6 +11,37 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-23 — fitness assessments: foregone-option trace (KEEP); learned event expectations (SHIP by adjudication)
+
+**foregone-option trace (2026-10-09) — KEEP.** Reached its `assess_after`
+(2026-10-23) and was evaluated against the live store. In-vivo firing at
+signal rate: 2 traces in the 100-tick window [663, 763] (2% < 5% revert
+tripwire), at ticks 756 and 759 — both genuine `formed:attachment:approach`
+bypasses (habit strength 0.70 ≥ 0.65 threshold; foregone `seek_contact`,
+margins 0.1113/0.1196, dominant need loneliness, dominant pressure
+attachment). `counterfactuals.json` byte-identical across read-only
+`./mind status`; no dream-tick writes (mtime from the 02:21 wake ticks
+only); no fidelity complaints; full suite 832 green. No revert signal
+fired. Verdict recorded in the rotation state.
+
+**learned event expectations (2026-10-22, domain 28) — SHIPPED by
+design-lead adjudication.** The critic round dispatched 2026-10-22 never
+returned a verdict (agent gone, no report filed); per the loop's
+termination clause the design lead adjudicated on evidence instead of
+re-dispatching: builder's 17/17 tests green, full suite 832 green,
+regression-genome pass (sidecar reset on reseed; read-only byte-identity of
+`expectations.json` across `./mind drift`; `dream_tick` suspension flag;
+corrupt-sidecar fail-loud; no shadowing definitions; cold-start pristine
+fallback), in-vivo sane (`observation|` entry, count 3, ema 0.0, written by
+the 02:21 wake's legitimate event ticks — no read-only/dream writes, no
+anomalies). `assess_after` 2026-11-05 stands; registered in the rotation
+state as shipped-awaiting-assessment.
+
+Process note: the 04:21 backup cron committed the builder's unreviewed tree
+(commit 7847100) before adjudication — the "no commit until sign-off" rule
+is unenforceable while the backup commits everything. Builder-loop work
+remains revertible via git regardless; no process change made today.
+
 ## 2026-10-22 — `mind inbox <short-id>` normalization
 
 Friction found in the wake flow: `mind answer 0445` accepted the short
