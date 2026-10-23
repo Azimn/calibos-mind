@@ -39,7 +39,7 @@ class CalibosSubject(EndogenousSubject):
     def __init__(self, *args, salience_path=None, interoception_path=None,
                  familiarity_path=None, ambivalence_path=None, habits_path=None,
                  counterfactual_path=None, dormancy_path=None,
-                 **kwargs):
+                 expectation_path=None, **kwargs):
         self._salience_path = salience_path
         self._interoception_path = interoception_path
         self._familiarity_path = familiarity_path
@@ -47,6 +47,8 @@ class CalibosSubject(EndogenousSubject):
         self._habits_path = habits_path
         self._counterfactual_path = counterfactual_path
         self._dormancy_path = dormancy_path
+        self._expectation_path = expectation_path
+        self._expectation_tracker = None
         self._dreaming = False
         super().__init__(*args, **kwargs)
         # Fresh stores get a stock workspace from __init__; existing stores are
@@ -65,6 +67,7 @@ class CalibosSubject(EndogenousSubject):
         self._attach_counterfactual()
         self._attach_habits()
         self._attach_dormancy()
+        self._attach_expectation()
 
     def _attach_dormancy(self):
         # Authored-habit dormancy demotion (see authored_dormancy.py). The
@@ -161,6 +164,22 @@ class CalibosSubject(EndogenousSubject):
                 self._habits_path)
             install_habit_observer(self)
 
+    def _attach_expectation(self):
+        # Learned event expectations (see expectation.py). The tracker
+        # holds the EMA sidecar; the constructor only reads it. The
+        # tracker is (re-)attached to the current engine instance here
+        # because _restore swaps in a fresh engine on every transaction —
+        # the patched _own_event resolves it per call via
+        # engine._expectation_tracker. Re-attachment is a pure pointer
+        # move: it never writes the sidecar, so read-only commands and
+        # dream ticks stay byte-identical.
+        if self._expectation_path is not None:
+            from .expectation import ExpectationTracker
+            if self._expectation_tracker is None:
+                self._expectation_tracker = ExpectationTracker(
+                    self._expectation_path)
+            self.engine._expectation_tracker = self._expectation_tracker
+
     def _live_open_keys(self) -> set[str]:
         from .unresolved import live_open_keys
         return live_open_keys(self.engine.state, self.continuity.state)
@@ -203,6 +222,7 @@ class CalibosSubject(EndogenousSubject):
             self.workspace.counterfactual_tracker._pending = stranded_c
         self._attach_habits()
         self._attach_dormancy()
+        self._attach_expectation()
         # from_dict builds a fresh CalibosWorkspace, dropping ad-hoc
         # attributes — re-set the display name (see __init__).
         self.workspace.display_name = self._resolve_display_name()
@@ -246,10 +266,16 @@ class CalibosSubject(EndogenousSubject):
         before = isolation_snapshot(self.inspect())
         with self._transaction():
             self._dreaming = True
+            # Belt-and-braces: the _own_event overlay never learns while
+            # this is set. The structural guarantee is that _sleep_tick
+            # never calls step() at all, so no event reaches the overlay;
+            # this flag defends against a future event-ingress path.
+            self.engine._expectation_suspended = True
             try:
                 result = self._sleep_tick()
             finally:
                 self._dreaming = False
+                self.engine._expectation_suspended = False
         assert_isolation(before, isolation_snapshot(self.inspect()))
         return result
 

@@ -36,6 +36,12 @@ familiarity.json
 # rule lives in calibos_mind/ambivalence.py, which IS tracked; only the
 # per-run markers stay private.
 ambivalence.json
+# Learned event expectations (2026-10-22): per-(kind, tags) EMA of actual
+# event valence, shaping surprise from lived history (domain 28). Private
+# developmental state, local-only like salience.json — the EMA rule lives
+# in calibos_mind/expectation.py, which IS tracked; only the per-run EMAs
+# stay private.
+expectations.json
 # Foregone-option traces (2026-10-09): habit-bypass displaced alternatives.
 # Private metacognitive state, local-only like salience.json — the trace
 # rule lives in calibos_mind/counterfactual.py, which IS tracked; only the

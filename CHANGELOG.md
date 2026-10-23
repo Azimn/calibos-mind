@@ -11,6 +11,97 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-22 — `mind inbox <short-id>` normalization
+
+Friction found in the wake flow: `mind answer 0445` accepted the short
+prompt id (`_normalize_prompt_id` -> `prompt-0445`), but `mind inbox
+0445` matched the raw id and reported "no queued prompt" — so the
+prompt's question text could not be read before answering it. The
+normal answer flow is read-then-answer; the read path failed on the id
+the listing implies. Fix: `cmd_inbox` now applies the same
+`_normalize_prompt_id` before matching. Wrapper-layer CLI UX only —
+no engine, protocol, or cartridge touch.
+
+Regression test: `tests/test_inbox_short_id.py` (short id and full id
+both resolve to the queued prompt's text). Inbox/queue suites still
+green (38 passed).
+
+Operational note, filed as discipline not code: the fix was verified
+live with `./mind queue`/`./mind answer --silent` against the live
+store — a test write into the real thought stream. The conftest
+fixture makes the *suite* structurally safe; manual one-off
+verification should use a tmp copy of the store instead. Not repeating.
+
+## 2026-10-22 — learned event expectations (domain 28)
+
+Spec: `research/specs/2026-10-22-learned-expectations.md` (adversarial
+pass on domain 28, "Lack of path dependence").
+
+The gap: domain 28 check (4) — "Early experiences do not alter
+interpretation of later ones" — was absent. The frozen engine's
+`SubjectEngine._own_event` derives `surprise` from
+`event.expected_valence`/`event.actual_valence`, but both are `None`
+for every event except the feeder's, so surprise always fell back to
+`clamp(intensity * 0.35)` — a stateless function of the current event.
+A mild event after a month of intense events was interpreted exactly as
+on day one.
+
+New module `calibos_mind/expectation.py`, engine overlay at import time
+(the `narrative.py` precedent — the venv stays byte-identical; revert =
+delete the module + its import line in `calibos_mind/__init__.py`):
+
+- Predict: when `event.expected_valence is None` and the local sidecar
+  (`expectations.json`, local-only, gitignored) holds an EMA entry for
+  the event's key (`kind|sorted(tags)`), the engine sees
+  `expected_valence = ema` and `actual_valence = actual or valence`, so
+  surprise becomes `|actual - ema|` — a function of lived history.
+- Learn: after the engine's own `_own_event` body runs (use-then-update:
+  the current event never informs its own expectation), the EMA moves
+  `ema := ema + 0.3 * (actual - ema)`, storing
+  `{ema, count, last_tick}`. Capped at 256 entries, stalest `last_tick`
+  evicts first (ties broken by key, keeping replay byte-identical).
+- Never override: events with an explicit `expected_valence` (feeder's
+  0.0/0.0) are never touched and never learn. Cold start (no entry):
+  nothing is set — the pristine `intensity * 0.35` fallback applies
+  byte-identically.
+- The patch passes the engine a shadow copy (`dataclasses.replace`) of
+  the event rather than mutating the caller's object, so a re-fed event
+  can never be misread as explicit on a second pass. An engine with no
+  tracker attached takes the pristine path untouched.
+- Hygiene: read-only commands and dream ticks never write (dream ticks
+  never call `step()` at all; a suspension flag during `dream_tick` is
+  belt-and-braces); `mind init --force` wipes the sidecar alongside the
+  other trackers (wired via `cli.EXPECTATIONS`, `expectation_path` on
+  `CalibosSubject`, re-attached on every `_restore` since the frozen
+  engine is rebuilt per transaction).
+
+Why load-bearing: surprise is spent by the frozen engine on concern
+scale/urgency, memory emotional charge and initial strength, and the
+cognition-admission trigger — so making `expected_valence` a function
+of the organism's own event history makes which events become concerns,
+how strongly memories are charged, and when cognition fires
+trajectory-dependent. Nothing is asserted about *what* to expect, only
+that expectations are learned from what happened.
+
+Fitness (all on synthetic /tmp stores): two stores with five +0.8 vs
+five -0.8 history events give a +0.4 probe different surprise (0.4 vs
+1.0) and different minted memory charge/strength; cold-start surprise
+is byte-identical to the pristine fallback (proven against the
+uninstalled engine); explicit expected_valence is never overridden and
+never learns; drift/status/review/consolidate --list and dream ticks
+leave the sidecar byte-identical and never create it; `init --force`
+deletes the sidecar and a post-reseed event starts cold; identical
+event sequences replay byte-identical; full suite green
+(`tests/test_expectation.py`, 17 tests).
+
+Revert signal: surprise differing from the pristine fallback on a
+cold-start key; an explicit expected_valence overridden or a feeder
+event written into the sidecar; any read-only/dream write; stale EMA
+after `init --force`; sidecar non-determinism; any existing test
+regressing. In vivo (assess_after 2026-11-05): EMA never moving across
+the window, or surprise deltas never propagating to concern urgency in
+any 100-tick stretch (dead weight = theater — revert).
+
 ## 2026-10-21 — authored-habit dormancy demotion (domain 27)
 
 Spec: `research/specs/2026-10-21-authored-habit-dormancy-demotion.md`.
@@ -3950,3 +4041,48 @@ Empty stash dirs pruned; five content-bearing stashes kept as incident
 record. The wake cron's TEMPORARY FORENSICS block is retired (cause found,
 fix verified). Standing lesson: test-suite reseeds never run against the
 live checkout — the conftest fixture remains the structural fix.
+
+## 2026-10-22 — conftest autouse fixture: live store unreachable from tests (structural)
+
+Fifth silent live-file loss (2026-10-22 ~08:36 CDT): the morning articles
+builder/critic loop's new learned-expectations tests ran `cmd_init --force`
+with a helper whose redirect set omitted COUNTERFACTUAL and DORMANCY —
+deleting the live authored-dormancy.json and counterfactuals.json, and
+(emptying) the proposals journal. The builder's own test docstring documents
+the incident. Every prior fix extended one helper's tuple; each new sidecar
+reopened the class.
+
+Structural fix: `tests/conftest.py` now carries an autouse fixture that
+redirects EVERY module-level cli store path (BASE, DB, INBOX, DREAMS,
+SALIENCE, INTEROCEPTION, FAMILIARITY, AMBIVALENCE, COUNTERFACTUAL, HABITS,
+DORMANCY, PROVENANCE, EXPECTATIONS, ARCHIVE, PROPOSALS, WAKE_LIVENESS,
+ABLATION_SALT_FILE, ABLATION_LOG) at a fresh tmp tree for every test, via
+monkeypatch (auto-reverted). CARTRIDGE_PATH stays live (read-only input).
+Per-test `_patched_cli`/`CliOnTmp` helpers nest safely inside it.
+
+`tests/test_sidecar_guard.py` fails if cli.py ever gains a store path not
+covered by the fixture's set — the set cannot silently drift again.
+
+Fitness: full suite green with the fixture active; a reseed-path test run
+leaves the live proposals/ untouched (verified live during the 2026-10-22
+suite run). Revert signal: any test that genuinely needs live paths
+(none exists today) — such a test must opt out explicitly and document why.
+
+## 2026-10-22 — Two test repairs under the conftest fixture (full suite 828 green)
+
+The autouse fixture exposed two latent issues (full suite: 828 passed,
+2 failed — both repaired, re-validated):
+
+1. `tests/adversarial/test_critic_feeder_r1.py::
+   test_harness_redirects_complete_path_set_and_restores` hard-coded the
+   premise that pre-harness cli paths are the live paths. Updated: the test
+   now pins save/restore symmetry of the harness itself without assuming
+   where "before" points (the fixture's tmp, not the live store).
+
+2. `tests/test_person_contact.py`'s `CliOnTmp` omitted DORMANCY (among
+   others): the test was accidentally passing via live
+   authored-dormancy.json state — the authored-dormancy demotion fired in
+   one scenario but not the other once the fixture gave each test a fresh
+   (nonexistent) dormancy file. Extended the helper to the complete path
+   set; each scenario now gets genuine per-scenario isolation, which is
+   what the test's store-unchanged assertion always intended.

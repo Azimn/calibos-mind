@@ -54,6 +54,7 @@ COUNTERFACTUAL = BASE / "counterfactuals.json"
 HABITS = BASE / "habits-formed.json"
 DORMANCY = BASE / "authored-dormancy.json"
 PROVENANCE = BASE / "provenance.json"
+EXPECTATIONS = BASE / "expectations.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
@@ -95,7 +96,8 @@ def _subject(provider=None):
                              ambivalence_path=AMBIVALENCE,
                              counterfactual_path=COUNTERFACTUAL,
                              habits_path=HABITS,
-                             dormancy_path=DORMANCY)
+                             dormancy_path=DORMANCY,
+                             expectation_path=EXPECTATIONS)
     if isinstance(provider, InboxCognition):
         # Stamp queued prompts with the store tick and record sequence at
         # queue time, so `mind answer` can refuse superseded views.
@@ -190,6 +192,14 @@ def cmd_init(args):
     expectation_policy = INBOX.parent / POLICY_FILE_NAME
     if expectation_policy.exists():
         expectation_policy.unlink()
+    # Learned-expectation EMA sidecar (2026-10-22): stale expected valences
+    # must never shape a reseeded incarnation's surprise (same bug class as
+    # the salience/familiarity resets above). The sidecar is deleted, not
+    # reset: a reseed starts with no learned expectations at all. Wiped
+    # BEFORE construction: the tracker fails loud on a corrupt sidecar,
+    # which would otherwise brick --force before the wipe ran.
+    if EXPECTATIONS.exists():
+        EXPECTATIONS.unlink()
     subject = _subject()
     with subject._transaction():
         for text, concept_pair in SEED_MEMORIES:
@@ -496,9 +506,13 @@ def cmd_inbox(args):
         print("inbox empty — nothing waiting for thought.")
         return 0
     if getattr(args, "id", None) is not None:
+        # Accept '0028' as well as 'prompt-0028', the same normalization the
+        # answer path uses, so reading a prompt before answering it never
+        # fails on the short id the listing implies.
         # Show one prompt in full: the engine invitation text plus every
         # experience untruncated. Falls back to a clear miss message rather
         # than an empty list when the id is wrong or already answered.
+        args.id = _normalize_prompt_id(args.id)
         match = [i for i in pending if i["id"] == args.id]
         if not match:
             print(f"no queued prompt {args.id!r} — it may be answered already "

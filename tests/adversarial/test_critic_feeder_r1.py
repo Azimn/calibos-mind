@@ -602,8 +602,12 @@ def test_harness_redirects_complete_path_set_and_restores():
     """The critic's own harness must redirect the complete 11-path set and
     leave the live module state exactly as found (the defect class that
     deleted live sidecars on 2026-10-08)."""
+    # 2026-10-22: no live-path premise — the tests/conftest.py autouse
+    # fixture redirects every cli path at a synthetic tree, so "before" is
+    # the fixture's tmp, not the live store. What this test pins is
+    # save/restore symmetry of the harness itself, which holds regardless
+    # of where "before" points.
     live_before = {name: getattr(cli, name) for name, _ in REDIRECT}
-    assert live_before["DB"] == BASE / "mind.db", "premise: live DB path"
     tmp, (make_subject, saved, paths) = _fresh("crit-meta-")
     try:
         for name, _ in REDIRECT:
@@ -621,4 +625,4 @@ def test_harness_redirects_complete_path_set_and_restores():
         _restore(saved)
     for name, _ in REDIRECT:
         assert getattr(cli, name) == live_before[name], \
-            f"cli.{name} not restored after harness (live-path leak)"
+            f"cli.{name} not restored after harness (path leak)"

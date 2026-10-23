@@ -33,21 +33,35 @@ BASE = Path(__file__).resolve().parents[1]
 
 
 class CliOnTmp:
-    """Redirect the CLI's store + sidecar paths at a synthetic tree."""
+    """Redirect the CLI's store + sidecar paths at a synthetic tree.
+
+    2026-10-22: the set must be complete — every scenario gets its own tmp,
+    so an omitted path (DORMANCY was the one that bit) leaks state between
+    the test's own scenarios via the fixture tmp and breaks the
+    store-unchanged assertion. Every path cmd_init touches is redirected,
+    no exceptions."""
 
     def __init__(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="person-contact-"))
         self.saved = {}
 
     def __enter__(self):
-        targets = {"DB": self.tmp / "t.db",
+        targets = {"BASE": self.tmp,
+                   "DB": self.tmp / "t.db",
                    "INBOX": self.tmp / "inbox",
                    "DREAMS": self.tmp / "dreams",
                    "SALIENCE": self.tmp / "salience.json",
                    "INTEROCEPTION": self.tmp / "interoception.json",
                    "HABITS": self.tmp / "habits-formed.json",
                    "AMBIVALENCE": self.tmp / "ambivalence.json",
-                   "FAMILIARITY": self.tmp / "familiarity.json"}
+                   "FAMILIARITY": self.tmp / "familiarity.json",
+                   "COUNTERFACTUAL": self.tmp / "counterfactuals.json",
+                   "DORMANCY": self.tmp / "authored-dormancy.json",
+                   "PROVENANCE": self.tmp / "provenance.json",
+                   "EXPECTATIONS": self.tmp / "expectations.json",
+                   "ARCHIVE": self.tmp / "archive",
+                   "PROPOSALS": self.tmp / "proposals",
+                   "WAKE_LIVENESS": self.tmp / "wake_liveness.json"}
         for name, path in targets.items():
             self.saved[name] = getattr(cli, name)
             setattr(cli, name, path)
