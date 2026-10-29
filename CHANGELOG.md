@@ -11,7 +11,112 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
-## 2026-10-23 — fitness assessments: foregone-option trace (KEEP); learned event expectations (SHIP by adjudication)
+## 2026-10-28 — persistent-near-miss note (domain 4, in builder/critic loop)
+
+Spec: `research/specs/2026-10-28-persistent-near-miss-note.md` (adversarial
+pass on domain 4, cycle 2, "Memory artificiality").
+
+The gap: domain 4 check 18 (familiar-but-unplaceable) — familiarity
+near-miss traces exist (shipped 2026-09-28) and persist in vivo (max
+streak 18 views at tick 844, several >= 11), but they never reach
+cognition: the streak is a sidecar id, never narrated as a felt
+"familiar but unplaceable" state. This mutation gives cognition a report
+of a persistently almost-recalled record without fabricating recall
+content: when a streak reaches 10 consecutive near-miss views without
+admission, the waking tick mints exactly one temporal record
+(generated_by=cognition) naming the record id and the streak count only.
+The target record's content stays unplaced until the existing 0.5 boost
+earns it admission.
+
+Mechanism: `PERSISTENT_NEAR_MISS_THRESHOLD = 10` in
+`calibos_mind/familiarity.py`; a `noted` guard map in the familiarity
+sidecar alongside `streaks` (old sidecars without it load cleanly;
+`reset()` wipes guard and streaks together; `init --force` deletes the
+whole sidecar). The mint reuses the stale-habit-note pattern
+(`subject._add("temporal", ..., generated_by="cognition")` inside the
+tick's transaction, canonical text + anchored-fullmatch parse,
+idempotent on (record_id, tick)). Guard-first ordering: the guard is
+saved before the mint, so a kill between the two loses the note (safe
+direction) rather than duplicating it. Admission or pruning clears the
+guard, so a later streak to 10 notes again. No engine edit, no cartridge
+change, no change to the boost (flat 0.5 at streak >= 3) or to streak
+counting/pruning semantics. Waking ticks only; read-only commands and
+dream ticks never touch the sidecar.
+
+Regression genome notes: the guard's orphan sweep runs at `observe()`
+entry, not after the near-miss loop — otherwise a fresh streak starting
+in the same call would inherit a dead episode's guard and its threshold
+note would be wrongly suppressed. The 10-note flood seen in the first
+integration probe (every streaking record noting on the same tick, the
+notes themselves pushing the target out of the 32-view window) is
+legitimate pruning semantics, not a defect: the target's episode ended
+because it genuinely stopped near-missing. Tests scope per-record
+assertions to the target and check globally that no (record_id, tick)
+pair ever notes twice.
+
+Tests: `tests/test_persistent_near_miss_note.py` (17 tests: streak 9 →
+zero notes; streak 10 → exactly one cognition note with id + streak and
+no target content, proved by unique marker; streak to 25 → still one;
+admission then re-streak → second note; pruning then re-streak → second
+note; read-only sweep + dream ticks → zero notes and byte-identical
+sidecar; `init --force` wipes streaks and guard; byte-identical replay;
+unit text/parse/mint/idempotency, old-sidecar loading, guard
+admission/pruning, orphan-guard healing, flat boost, reset, cartridge
+fingerprint). Full suite green: 849 passed in 2053.68s (prior 832 + 17
+new, zero failures).
+`assess_after` 2026-11-11; registered in the rotation state on ship.
+Revert = remove the mint call + guard (restore the sidecar shape); notes
+already minted stay as history, never deleted. No commit (backup job
+handles commits).
+
+Round-2 fix (2026-10-28, critic round 1 verdict FAIL): the mechanism
+fed its own input without bound — minted notes were themselves eligible
+near-miss candidates, so a note lingering in the near-miss band for 10
+ticks minted a child note about itself, ad infinitum (measured in a
+200-tick full-subject run: 194 notes, 181 notes about notes, worst
+100-tick window 101 notes, cascade depth 38 and still growing in a
+400-tick run). Fix: `workspace.view()` excludes persistent-near-miss
+notes from the near-miss side-channel, identified by the canonical
+note-text pattern (`is_near_miss_note_text`), not a mint-time flag —
+so notes minted before the fix are excluded too, and `observe()`'s
+pruning then clears any legacy streak a note already holds. Notes still
+enter view eligibility, salience, and dedupe like any temporal record;
+only near-miss candidacy is closed to them. No change to the boost,
+threshold, or episode-guard semantics; no rate cap (a cap would leave
+self-referential felt reports and band saturation in place). Measured
+after the fix on the same 200-tick run: 12 notes, worst 100-tick window
+10, zero notes about notes — the residual 10-note opening burst is 10
+distinct genuine records (tick-machinery body/realization records plus
+the target) each earning exactly one spec-conformant note at streak 10,
+not cascade; the critic's rate test (worst window <= 5) still fails on
+that genuine burst, which is a test-premise question for adjudication,
+not a self-reference defect. Genuine-target streak tracking verified
+intact (target notes at streak 10; critic 9/10 + builder 17/17 green).
+No commit.
+
+Design-lead adjudication (2026-10-28, critic round 2): SHIP. Critic
+round 2 re-verified the fix independently — cascade 0 (was 181), the
+self-note test passes, the genuine target notes exactly once at streak
+10, genome item-by-item pass on the changed lines — and classified the
+one remaining red test as a PROVEN test-premise error, not a code
+defect: the global <= 5/100-tick cap contradicts the spec's
+per-record-per-episode mechanism when a fixture synchronizes many
+genuine episodes, and mismeasures the spec's revert signal, which
+targets duplicates, cascades, and steady-state noise (all clean:
+steady-state worst window ticks 50-200 is 2). The design lead accepts
+that correction: the round-1 global-cap assertion is RETIRED (see the
+retirement comment in tests/adversarial/test_critic_pnm_r1.py) and
+superseded by the critic's corrected-premise test
+(tests/adversarial/test_critic_pnm_r2.py::test_long_run_corrected_premise:
+cascade = 0, one note per record at streak 10, steady-state window
+<= 5), which passes. No round-3 code change: there is no code defect
+left for a builder to fix. The in-vivo revert tripwire is refined
+accordingly and recorded in the rotation state: duplicates within an
+episode, notes about notes, or a STEADY-STATE (post-transient) note
+rate above 5% of waking ticks in a 100-tick window — a synchronized
+seeding transient of distinct genuine episodes is not a revert trigger.
+Registered in the rotation state on ship with assess_after 2026-11-11.
+No commit (backup job handles commits).
 
 **foregone-option trace (2026-10-09) — KEEP.** Reached its `assess_after`
 (2026-10-23) and was evaluated against the live store. In-vivo firing at

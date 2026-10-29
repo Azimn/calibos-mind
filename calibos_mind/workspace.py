@@ -35,7 +35,7 @@ from dataclasses import FrozenInstanceError
 from jelly_psiduck.workspace import CognitiveView, FeltExperience, SubjectiveWorkspace
 
 from .consolidate import excluded_ids
-from .familiarity import FAMILIARITY_WINDOW
+from .familiarity import FAMILIARITY_WINDOW, is_near_miss_note_text
 from .selfgain import self_boost_for
 from .unresolved import has_unresolved_links
 
@@ -294,10 +294,21 @@ class CalibosWorkspace(SubjectiveWorkspace):
         # admitted and archived/ineligible records never reach `ranked`,
         # so neither can near-miss; dedupe-losers and cap-excluded records
         # CAN near-miss — they are the genuine competitors.
+        # Persistent-near-miss notes themselves are NEVER candidates
+        # (domain 4, 2026-10-28 round 2): a note that near-missed would
+        # build a streak and mint a note about itself, feeding the
+        # mechanism its own input without bound (measured: 194 notes in
+        # 200 ticks, cascade depth 38 and still growing). Identification
+        # is by the canonical note-text pattern, not a mint-time flag,
+        # so notes minted before this fix are excluded too — and
+        # observe()'s pruning then clears any legacy streak a note
+        # already holds, since it is in neither the admitted nor the
+        # near-miss set on the next waking tick.
         admitted_ids = {r.id for r in admitted}
         self._last_near_miss_ids = tuple(
             r.id for r in ranked[:FAMILIARITY_WINDOW]
-            if r.id not in admitted_ids)
+            if r.id not in admitted_ids
+            and not is_near_miss_note_text(r.first_person))
         if tracker is None:
             admitted = admitted[::-1]
         window = pinned + admitted
