@@ -11,6 +11,24 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-10-31 — mutation assessments: bidirectional-narrative-confidence KEEP, inspection-provenance stamp KEEP (articles review)
+
+Two mutations reached their assess_after date (2026-10-31); both kept on
+evidence, neither reverted. No code changed.
+
+- Bidirectional-narrative-confidence (shipped 2026-10-10): decay behaves
+  per spec in vivo — pattern:comfort sits at exactly the 0.5 floor (last
+  updated tick 144, long-unrehearsed, exactly the deploy-day prediction)
+  and pattern:social at 0.5161 (updated tick 612, decayed toward the
+  floor, never crossed). No claim instability under consistent evidence.
+  The contradiction-revision clause is unexercised in vivo (no claim near
+  1.0 to revise) — inert, not broken. Full suite 860/860 green.
+- Inspection-provenance stamp (shipped 2026-10-17): code path intact
+  (cli.py --inspection, provider _is_self_authored). In vivo it never
+  fired across the window — 0 'voluntary:inspection' records among 1472,
+  because the waker never invokes think --inspection — inert, not broken.
+  No stamp appeared via any other path. Full suite 860/860 green.
+
 ## 2026-10-28 — persistent-near-miss note (domain 4, in builder/critic loop)
 
 Spec: `research/specs/2026-10-28-persistent-near-miss-note.md` (adversarial
