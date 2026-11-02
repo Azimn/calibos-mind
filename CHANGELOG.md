@@ -11,6 +11,39 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-01 — mutation assessment: consolidation-journal durability KEEP (articles review)
+
+The 2026-10-18 journal-durability mutation reached its assess_after date
+(2026-11-01) and is kept on evidence; no revert signal fired. In vivo the
+journal survived intact through the window: 438 proposals, journal.seq 438,
+consistent, mtime 2026-10-22, untouched by read-only drift/status runs and
+by the full-suite run under the 2026-10-22 conftest fixture. No
+restore-destroys-newer event, no backup written on a read-only path, no
+false recovery claim, no deadlock or hang, no stale proposal id attaching
+to a recycled experience id. Full suite 905 passed + 1 failed; the single
+failure is a proven order-dependent home_sim boundary artifact
+(`test_import_pulls_no_mind_package` passes in isolation and fails when any
+mind test runs first in the same process — sys.modules pollution), unrelated
+to the journal code and not a regression of this mutation.
+
+## 2026-11-01 — authored-dormancy sidecar latch restored (articles review tending, no code change)
+
+The 2026-11-01 articles review found the `authored-dormancy.json` latch
+desynced from live state: both authored habits sit at strength 0.64 with
+demotion notes minted at tick 735 (experience-1137/1138), but the sidecar
+said `demoted: false` for both — the latch was lost when the sidecar was
+wiped in the 2026-10-22 test incident and re-seeded afterwards. The live
+outcome was never wrong (0.64 held, notes exist), but the ratchet's latch
+was gone: a future baseline restore would have re-demoted with a second
+note instead of holding the latched state. Repair, via the tracker class
+itself (load-validated, reload-validated): both entries set to
+`demoted: true, demoted_tick: 735, owed: null`. Reconcile targets 0.64,
+unchanged; a read-only drift+status sweep leaves the sidecar byte-identical
+after the repair. A general self-healing re-latch branch was considered and
+declined: the known wipe class is structurally prevented by the 2026-10-22
+conftest fixture, and a new branch in the ratchet is not worth it for a
+one-off artifact. Backup of the pre-repair sidecar: /tmp (ephemeral).
+
 ## 2026-10-31 — mutation assessments: bidirectional-narrative-confidence KEEP, inspection-provenance stamp KEEP (articles review)
 
 Two mutations reached their assess_after date (2026-10-31); both kept on
