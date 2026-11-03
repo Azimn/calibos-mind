@@ -11,6 +11,60 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-02 — state-congruent retrieval gain (articles review, Domain 9; in builder/critic loop)
+
+A pure, view-time, flat +0.5 retrieval gain for state-congruent recall
+(Domain 9, check 5: no mood-congruent recall — absent). A record whose
+`concepts` contain the name of a need at felt level exactly 2 (the
+'pressing' band `mind status` reports — the perceived state, not the
+actual engine level, per the interoception module's felt/actual
+distinction) gains +0.5 in the salience-ranked view sort key, the same
+scale as SELF_BOOST and FAMILIARITY_BOOST: meaningful against live
+activations (roughly -2.7 .. +3.2) without being dominant. New module
+`calibos_mind/statecongruence.py` copies the selfgain pattern (pure
+function, no sidecar, no state, no writes, no clock, no RNG,
+deterministic); `CalibosWorkspace` threads the felt levels through a
+new `felt_levels_provider`, following the `open_keys_provider` pattern
+(read once per view, salience-ranked branch only — the recency fallback
+is unchanged, pinned roots bypass ranking as before). `CalibosSubject`
+attaches the provider to read the interoception tracker's stored graded
+levels live at view time (also on every `_restore`); no tracker, or no
+felt state yet, reads as an empty mapping. No provider at all (plain
+workspace use) is the defined zero-gain case: the gain is exactly 0.0
+and windows are identical to the pre-gain ranking. Flatness is exact:
+one pressing need or three, one concept match or several — one +0.5,
+never scaled. Level 3 ('urgent') is a distinct band, not 'pressing',
+and does not fire; levels 0/1 do not fire. Known thinness, stated
+honestly (from the spec): need-name concepts are sparse in vivo
+(hunger 43, thirst 26, curiosity 14, others <10 of 1559 records), so
+the gain fires rarely at first — inert, not broken. Engine and
+cartridge byte-identical; no migration needed. Tests:
+`tests/test_statecongruence.py` (23 tests, synthetic /tmp stores only).
+
+Fitness function (spec: research/specs/2026-11-02-state-congruent-retrieval-gain.md):
+(1) paired synthetic stores identical except one record's concepts
+(pressing-need name vs neutral control) with that need pressing — the
+need-matching record ranks strictly above the control and is admitted
+to the 16-window where the control is not; (2) flatness — one vs three
+pressing needs give identical gain; (3) non-pressing need name, felt
+level 0/1/3, or no provider — zero gain, windows identical to the
+zero-gain ranking; (4) non-boosted relative order preserved (purely
+additive); (5) no sidecar created or modified by the gain path, and
+read-only drift/status sweeps plus dream ticks leave sidecars
+byte-identical (scoped per the regression genome: CLI construction
+itself rewrites the payload row); (6) determinism — identical
+sequences give identical windows; (7) full suite green, engine +
+cartridge byte-identical.
+
+Revert signal: the gain admits a record that dedupe/per-class caps
+deliberately excluded, with an existing test regressing; need-matching
+records exceed 50% of the unpinned window over a day (dominance);
+any write from the gain path; the gain fires for a need that is not
+pressing (felt level != 2), or fires when no provider is supplied;
+any existing test regresses. In vivo never firing is inert, not a
+revert trigger (sparse concept signal); firing on a non-pressing need
+IS a revert trigger. Assess after: 2026-11-16.
+
 ## 2026-11-01 — mutation assessment: consolidation-journal durability KEEP (articles review)
 
 The 2026-10-18 journal-durability mutation reached its assess_after date

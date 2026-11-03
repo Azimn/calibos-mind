@@ -37,6 +37,7 @@ from jelly_psiduck.workspace import CognitiveView, FeltExperience, SubjectiveWor
 from .consolidate import excluded_ids
 from .familiarity import FAMILIARITY_WINDOW, is_near_miss_note_text
 from .selfgain import self_boost_for
+from .statecongruence import state_congruent_boost_for
 from .unresolved import has_unresolved_links
 
 
@@ -201,6 +202,14 @@ class CalibosWorkspace(SubjectiveWorkspace):
     # state so the Zeigarnik boost intersects links against what is actually
     # open. None -> the shared helper falls back to the legacy any-link check.
     open_keys_provider = None
+    # Callable returning the current felt levels (see
+    # calibos_mind/statecongruence.py): a mapping of need name -> felt
+    # level (0/1/2/3 per interoception.FELT_BANDS). Attached by
+    # CalibosSubject from the interoception tracker, read once per view
+    # like open_keys_provider. None -> no felt state, the gain is exactly
+    # 0 and the salience-ranked window is unchanged (the defined
+    # zero-gain case, not a silent default).
+    felt_levels_provider = None
     # Path to the consolidation availability journal (archive/availability.json).
     # Records listed there are archived: history, never deleted, but excluded
     # from cognition views. None -> no exclusions (e.g. plain engine use).
@@ -264,6 +273,8 @@ class CalibosWorkspace(SubjectiveWorkspace):
         if tracker is not None:
             provider = self.open_keys_provider
             open_keys = provider() if provider is not None else None
+            felt_provider = self.felt_levels_provider
+            felt_levels = felt_provider() if felt_provider is not None else None
             now_tick = max((r.tick for r in rest), default=0)
             ranked = sorted(
                 rest,
@@ -276,7 +287,11 @@ class CalibosWorkspace(SubjectiveWorkspace):
                     # additive, so non-boosted records keep their relative
                     # order. Salience-ranked branch only — the recency
                     # fallback below is unchanged.
-                    + self_boost_for(r, self.display_name),
+                    + self_boost_for(r, self.display_name)
+                    # State-congruent retrieval gain (Domain 9): flat,
+                    # purely additive, same discipline as the self gain.
+                    # felt_levels None -> exactly 0 (defined zero-gain).
+                    + state_congruent_boost_for(r, felt_levels),
                     r.tick),
                 reverse=True,
             )

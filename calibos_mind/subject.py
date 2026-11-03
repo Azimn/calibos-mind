@@ -92,6 +92,15 @@ class CalibosSubject(EndogenousSubject):
         # Zeigarnik open-set: read live in-memory state (no DB, no writes),
         # so workspace.view() intersects links against what is actually open.
         self.workspace.open_keys_provider = self._live_open_keys
+        # State-congruent retrieval gain (Domain 9): the felt levels the
+        # view ranking reads, same provider pattern. Read live from the
+        # interoception tracker at view time (attached by
+        # _attach_interoception, also on every _restore); no tracker, or
+        # no felt state yet, reads as an empty mapping — zero gain, never
+        # a guessed level. The provider itself is always attached here,
+        # so "no provider" arises only for a plain workspace, where the
+        # gain is likewise exactly 0 by definition.
+        self.workspace.felt_levels_provider = self._live_felt_levels
 
     def _attach_interoception(self):
         # Felt body state for the interoceptive gap (see interoception.py).
@@ -183,6 +192,31 @@ class CalibosSubject(EndogenousSubject):
     def _live_open_keys(self) -> set[str]:
         from .unresolved import live_open_keys
         return live_open_keys(self.engine.state, self.continuity.state)
+
+    def _live_felt_levels(self) -> dict[str, int]:
+        """Current felt levels by need, for the state-congruent gain.
+
+        Reads the interoception tracker's stored graded levels (the felt
+        body, with lag and hysteresis already applied there — this method
+        adds no math of its own). Entries without a genuine int level are
+        skipped, never defaulted: a need with no felt state contributes
+        nothing, so it can never gain. No tracker -> empty mapping.
+        """
+        tracker = getattr(self.workspace, "interoception_tracker", None)
+        if tracker is None:
+            return {}
+        data = getattr(tracker, "data", None)
+        needs = data.get("needs") if isinstance(data, dict) else None
+        if not isinstance(needs, dict):
+            return {}
+        out: dict[str, int] = {}
+        for key, entry in needs.items():
+            if not isinstance(entry, dict):
+                continue
+            level = entry.get("level")
+            if isinstance(level, int) and not isinstance(level, bool):
+                out[key] = level
+        return out
 
     def _restore(self, raw):
         # Ambivalence pending carryover (2026-10-03, critic round 1): the
