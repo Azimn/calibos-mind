@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 
 from jelly_psiduck.endogenous import EndogenousSubject
 from jelly_psiduck.runtime import concepts
@@ -39,7 +40,7 @@ class CalibosSubject(EndogenousSubject):
     def __init__(self, *args, salience_path=None, interoception_path=None,
                  familiarity_path=None, ambivalence_path=None, habits_path=None,
                  counterfactual_path=None, dormancy_path=None,
-                 expectation_path=None, **kwargs):
+                 expectation_path=None, mood_path=None, **kwargs):
         self._salience_path = salience_path
         self._interoception_path = interoception_path
         self._familiarity_path = familiarity_path
@@ -48,6 +49,7 @@ class CalibosSubject(EndogenousSubject):
         self._counterfactual_path = counterfactual_path
         self._dormancy_path = dormancy_path
         self._expectation_path = expectation_path
+        self._mood_path = mood_path
         self._expectation_tracker = None
         self._dreaming = False
         super().__init__(*args, **kwargs)
@@ -68,6 +70,23 @@ class CalibosSubject(EndogenousSubject):
         self._attach_habits()
         self._attach_dormancy()
         self._attach_expectation()
+        self._attach_mood()
+
+    def _attach_mood(self):
+        # Slow affective residue (see mood.py). The tracker constructor
+        # only reads the sidecar (failing loud on a corrupt file);
+        # residues move exclusively via update()+save() on the waking-tick
+        # path (cli._run_tick); read-only commands and dream ticks never
+        # write. Re-attached on every _restore like the other trackers,
+        # for the same reason (a fresh engine instance per transaction).
+        if self._mood_path is not None:
+            from .mood import MoodTracker
+            self.workspace.mood_tracker = MoodTracker(self._mood_path)
+        # The provider is always attached here, so "no provider" arises
+        # only for a plain workspace, where the gain is likewise exactly
+        # 0 by definition. No tracker, or no residue state yet, reads as
+        # empty residues — zero gain, never a guessed mood.
+        self.workspace.mood_provider = self._live_mood
 
     def _attach_dormancy(self):
         # Authored-habit dormancy demotion (see authored_dormancy.py). The
@@ -193,6 +212,53 @@ class CalibosSubject(EndogenousSubject):
         from .unresolved import live_open_keys
         return live_open_keys(self.engine.state, self.continuity.state)
 
+    def _live_mood(self):
+        """Current mood residues plus fast pressure deviations, for the mood gain.
+
+        Residues come from the mood tracker sidecar (the slow EMA); fast
+        deviations are live engine pressures minus their baselines
+        (baselines read from the engine, never hardcoded). Fail closed,
+        twice over: a fast entry is emitted ONLY for a key present in
+        BOTH pressures and pressure_baselines. A residue key the engine
+        no longer tracks — in neither — gets no entry, and neither does
+        a pressure with a live value but no baseline: with no baseline
+        there is no recorded deviation, and reading it against a guessed
+        0.0 would manufacture the same settled reading the residue-only
+        case did (round-1 critic test 3 proved the half-record case is
+        live: a waking tick's conduct re-adds a vanished pressure at a
+        small value with no baseline, which read as settled and fired).
+        In normal engine operation every pressure carries its baseline,
+        so this strictness changes nothing in vivo; it only bites on
+        partial or vanished pressure records, where the pure gain
+        function must fail closed (mood.py: a pressure with no fast
+        deviation on record never fires). A withheld key's residue still
+        decays on the waking-tick path via MoodTracker.update, which
+        keeps residue keys in its own key set; only this view-time fast
+        mapping withholds the settled reading. Entries without genuine
+        finite numbers are skipped, never defaulted. No tracker ->
+        empty residues.
+        """
+        tracker = getattr(self.workspace, "mood_tracker", None)
+        residues = tracker.residues if tracker is not None else {}
+        state = getattr(self.engine, "state", None)
+        pressures = getattr(state, "pressures", None)
+        baselines = getattr(state, "pressure_baselines", None)
+        if not isinstance(pressures, dict):
+            pressures = {}
+        if not isinstance(baselines, dict):
+            baselines = {}
+        fast: dict[str, float] = {}
+        for key in set(pressures) & set(baselines):
+            current = pressures[key]
+            base = baselines[key]
+            if (isinstance(current, (int, float))
+                    and not isinstance(current, bool)
+                    and isinstance(base, (int, float))
+                    and not isinstance(base, bool)
+                    and math.isfinite(current) and math.isfinite(base)):
+                fast[key] = float(current) - float(base)
+        return residues, fast
+
     def _live_felt_levels(self) -> dict[str, int]:
         """Current felt levels by need, for the state-congruent gain.
 
@@ -257,6 +323,7 @@ class CalibosSubject(EndogenousSubject):
         self._attach_habits()
         self._attach_dormancy()
         self._attach_expectation()
+        self._attach_mood()
         # from_dict builds a fresh CalibosWorkspace, dropping ad-hoc
         # attributes — re-set the display name (see __init__).
         self.workspace.display_name = self._resolve_display_name()

@@ -55,6 +55,7 @@ HABITS = BASE / "habits-formed.json"
 DORMANCY = BASE / "authored-dormancy.json"
 PROVENANCE = BASE / "provenance.json"
 EXPECTATIONS = BASE / "expectations.json"
+MOOD = BASE / "mood.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
@@ -97,7 +98,8 @@ def _subject(provider=None):
                              counterfactual_path=COUNTERFACTUAL,
                              habits_path=HABITS,
                              dormancy_path=DORMANCY,
-                             expectation_path=EXPECTATIONS)
+                             expectation_path=EXPECTATIONS,
+                             mood_path=MOOD)
     if isinstance(provider, InboxCognition):
         # Stamp queued prompts with the store tick and record sequence at
         # queue time, so `mind answer` can refuse superseded views.
@@ -200,6 +202,13 @@ def cmd_init(args):
     # which would otherwise brick --force before the wipe ran.
     if EXPECTATIONS.exists():
         EXPECTATIONS.unlink()
+    # Slow affective residue sidecar (2026-11-03): stale residues must
+    # never attach to a reseeded incarnation's ticks (same bug class as
+    # the salience/familiarity resets above). Wiped BEFORE construction:
+    # the tracker fails loud on a corrupt sidecar, which would otherwise
+    # brick --force before the wipe ran.
+    if MOOD.exists():
+        MOOD.unlink()
     subject = _subject()
     with subject._transaction():
         for text, concept_pair in SEED_MEMORIES:
@@ -457,6 +466,21 @@ def _run_tick(subject):
             # stay pending for the next tick's take_pending_closings().)
             tracker.ack_closings(events)
         tracker.save()
+    # Slow affective residue (domain 10, 2026-11-03): the mood sidecar's
+    # per-pressure EMA chases the engine pressures' deviation from their
+    # baselines, once per waking tick. Never on dream ticks (dream_tick()
+    # does not come through here) or read-only commands (they never tick).
+    # Baselines are read from the engine, never hardcoded. Save only when
+    # a residue moved (no-op write discipline, mirroring familiarity).
+    # Local named mood_sidecar, not *tracker: two genome tests count a
+    # literal substring in this file to pin the interoception update's
+    # single call site, and a *tracker local here would trip that
+    # substring count without adding a second interoception site.
+    mood_sidecar = getattr(subject.workspace, "mood_tracker", None)
+    if mood_sidecar is not None:
+        if mood_sidecar.update(dict(subject.engine.state.pressures),
+                               dict(subject.engine.state.pressure_baselines)):
+            mood_sidecar.save()
     # Familiarity traces (2026-09-28): near-miss retrieval streaks fold one
     # view's outcome into the sidecar, once per waking tick. Never on dream
     # ticks — dream_tick() does not come through here, so dream views see

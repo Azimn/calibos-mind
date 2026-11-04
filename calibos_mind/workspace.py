@@ -36,6 +36,7 @@ from jelly_psiduck.workspace import CognitiveView, FeltExperience, SubjectiveWor
 
 from .consolidate import excluded_ids
 from .familiarity import FAMILIARITY_WINDOW, is_near_miss_note_text
+from .mood import mood_residue_boost_for
 from .selfgain import self_boost_for
 from .statecongruence import state_congruent_boost_for
 from .unresolved import has_unresolved_links
@@ -210,6 +211,16 @@ class CalibosWorkspace(SubjectiveWorkspace):
     # 0 and the salience-ranked window is unchanged (the defined
     # zero-gain case, not a silent default).
     felt_levels_provider = None
+    # Callable returning the current mood state (see calibos_mind/mood.py):
+    # a (residues, fast_deviations) pair of mappings of pressure name ->
+    # float, read once per view like felt_levels_provider. Attached by
+    # CalibosSubject from the mood tracker and live engine pressures.
+    # None -> no mood state, the gain is exactly 0 (the defined
+    # zero-gain case, not a silent default).
+    mood_provider = None
+    # Attached by CalibosSubject when a mood sidecar path is configured.
+    # None -> no residue state (plain engine behavior).
+    mood_tracker = None
     # Path to the consolidation availability journal (archive/availability.json).
     # Records listed there are archived: history, never deleted, but excluded
     # from cognition views. None -> no exclusions (e.g. plain engine use).
@@ -275,6 +286,17 @@ class CalibosWorkspace(SubjectiveWorkspace):
             open_keys = provider() if provider is not None else None
             felt_provider = self.felt_levels_provider
             felt_levels = felt_provider() if felt_provider is not None else None
+            # Slow affective residue (Domain 10): read once per view, like
+            # the felt levels above. A malformed provider return (not a
+            # (residues, fast_deviations) pair) reads as no mood state —
+            # the gain function itself is also malformed-safe, so a bad
+            # provider can never break view construction.
+            mood_provider = self.mood_provider
+            mood_state = mood_provider() if mood_provider is not None else None
+            if isinstance(mood_state, tuple) and len(mood_state) == 2:
+                mood_residues, mood_fast = mood_state
+            else:
+                mood_residues, mood_fast = None, None
             now_tick = max((r.tick for r in rest), default=0)
             ranked = sorted(
                 rest,
@@ -291,7 +313,12 @@ class CalibosWorkspace(SubjectiveWorkspace):
                     # State-congruent retrieval gain (Domain 9): flat,
                     # purely additive, same discipline as the self gain.
                     # felt_levels None -> exactly 0 (defined zero-gain).
-                    + state_congruent_boost_for(r, felt_levels),
+                    + state_congruent_boost_for(r, felt_levels)
+                    # Mood-residue retrieval gain (Domain 10): flat,
+                    # purely additive, same discipline as the gains above.
+                    # Fires only for a settled pressure with an elevated
+                    # residue, so it cannot duplicate the live-spike gain.
+                    + mood_residue_boost_for(r, mood_residues, mood_fast),
                     r.tick),
                 reverse=True,
             )

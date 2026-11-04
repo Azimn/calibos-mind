@@ -11,6 +11,70 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-03 — slow affective residue ("mood tone") (articles review, Domain 10, cycle 2; in builder/critic loop)
+
+A diffuse mood with a cause, not causeless theater: a per-pressure slow
+EMA sidecar (`mood.json`, next to `interoception.json`) over each engine
+pressure's deviation from its baseline, updated once per waking tick in
+`cli._run_tick` (the same waking-only seam the feeder, interoception
+update, and habit machinery use). New module `calibos_mind/mood.py`
+mirrors the `statecongruence.py` pattern: the EMA half-life is declared
+(100 ticks, the fast end of the spec's ~100–200 range, so a sustained
+~30-tick full excursion reaches 0.188, above the pinned 0.15 threshold)
+with ALPHA derived from it exactly, never tuned silently; baselines are
+read from the engine, never hardcoded; a pressure that leaves the
+engine's set decays as back-at-baseline rather than freezing a phantom
+residue. The view-time gain is a pure function,
+`mood_residue_boost_for`: a flat +0.5 (same scale as
+STATE_CONGRUENT_BOOST) when ANY concept of the record names a pressure
+whose residue is at/above threshold AND whose fast deviation is back
+near baseline (|dev| <= 0.05) — the mood fires only after the trigger
+has settled, so it cannot duplicate the state-congruent gain during a
+live spike. Wired through a workspace `mood_provider` mirroring
+`felt_levels_provider` (read once per view, salience-ranked branch only;
+the recency fallback is unchanged), attached by `CalibosSubject` from the
+tracker plus live engine pressures, also on every `_restore`. The gain
+only reorders the sort key, before dedupe and per-class caps run, so a
+boosted record can never bypass either. Hard constraints honored:
+read-only commands and `dream_tick()` never write the sidecar (scoped
+no-write assertions on `mood.json` bytes, since CLI construction itself
+rewrites the SQLite payload row); `init --force` wipes `mood.json`
+before construction, so a corrupt sidecar can never brick a reseed; a
+corrupt sidecar fails loud (ValueError, never silent-delete or
+silent-zero); identical tick/pressure sequences replay byte-identical;
+malformed provider input yields 0.0, never a crash in view construction.
+No records are minted, no text is written, no engine or cartridge code
+changes (fingerprint unchanged). 32 new tests in `tests/test_mood.py`
+cover all eight fitness items, including the spike-and-settle paired
+stores, the live-spike block, decay to byte-identical windows, flatness,
+zero-gain cases, cap/dedupe non-bypass, and isolation (view sweep,
+dream ticks, read-only CLI commands, `init --force`, corrupt sidecar,
+byte-identical replay). Known thinness, stated honestly (from the
+spec): pressure-named concepts in records may be sparse, so the gain
+may fire rarely at first — inert, not broken. Assess after 2026-11-17.
+
+## 2026-11-03 — mood residue round 2: fail-closed fast mapping (critic round 1 fix)
+
+Critic round 1 FAIL, fixed: `CalibosSubject._live_mood` synthesized
+fast=0.0 ("settled") for residue keys the engine no longer tracks,
+letting a phantom residue fire the pure gain with no live engine
+corroboration (175/200 waking ticks while decaying). The provider now
+emits a fast entry ONLY for keys present in BOTH engine pressures and
+pressure_baselines — a residue-only key gets no entry, and neither does
+a pressure with a live value but no baseline (a waking tick's conduct
+re-adds vanished pressures half-recorded, e.g. attachment at 0.006 with
+no baseline, which read as settled and fired). With no fast deviation
+on record the pure function fails closed, per its own documented rule.
+In normal engine operation every pressure carries its baseline, so this
+changes nothing in vivo. `_run_tick` decay of untracked keys is
+unchanged (decay itself was never the defect). One regression test
+added (`test_live_provider_fails_closed_on_partial_pressure_records`);
+no existing test weakened, no engine or cartridge change. Critic tests
+1 and 3 now pass; critic test 2 still fails, but on its own premise,
+not on the gain — see the round-2 builder report (the target record is
+admitted even with the gain disabled entirely, because the seeded
+window is not full: thought cap 4, memory cap 4, 1 pinned = 7 ids).
+
 ## 2026-11-02 — state-congruent retrieval gain (articles review, Domain 9; in builder/critic loop)
 
 A pure, view-time, flat +0.5 retrieval gain for state-congruent recall

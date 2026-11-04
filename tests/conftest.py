@@ -33,7 +33,7 @@ from calibos_mind import cli
 REDIRECTED = (
     "BASE", "DB", "INBOX", "DREAMS", "SALIENCE", "INTEROCEPTION",
     "FAMILIARITY", "AMBIVALENCE", "COUNTERFACTUAL", "HABITS",
-    "DORMANCY", "PROVENANCE", "EXPECTATIONS", "ARCHIVE", "PROPOSALS",
+    "DORMANCY", "PROVENANCE", "EXPECTATIONS", "MOOD", "ARCHIVE", "PROPOSALS",
     "WAKE_LIVENESS", "ABLATION_SALT_FILE", "ABLATION_LOG",
 )
 
@@ -51,6 +51,7 @@ _FILENAMES = {
     "DORMANCY": "authored-dormancy.json",
     "PROVENANCE": "provenance.json",
     "EXPECTATIONS": "expectations.json",
+    "MOOD": "mood.json",
     "ARCHIVE": "archive",
     "PROPOSALS": "proposals",
     "WAKE_LIVENESS": "wake_liveness.json",
