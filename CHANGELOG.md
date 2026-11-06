@@ -11,6 +11,55 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-05 — mutation assessment: learned event expectations KEEP; articles review, Domain 12 Attention (cycle 2)
+
+Assessment only, no code change. Learned event expectations (shipped
+2026-10-23, assess_after 2026-11-05): **KEEP**. Sidecar healthy — single
+key `observation|`, count 32, ema 0.0, last_tick 976 (current tick); no
+feeder/food/drink keys, so the never-override rule holds in vivo (explicit
+0.0/0.0 feeder events never learn). EMA 0.0 is the correct learned value,
+not a stalled mechanism: every one of the 32 learned actual valences was
+0.0 (`mind note` observations are valence-neutral by default), so 0.0 is
+what the lived history says. The mechanism is causally load-bearing, not
+dead weight: every observation after the first now takes surprise =
+|0.0 − 0.0| = 0 instead of the pristine fallback intensity×0.35 (intensity
+0.5 in vivo), and the frozen engine's fixed formulas propagate that into
+memory strength (0.25×surprise), charge (0.2×surprise) and concern urgency
+(0.2×surprise) by construction — 31 of 32 observations differ from
+pristine. No revert signal fired: no false expectation on cold start, no
+explicit-valence override, no reseed/recycled-id incident, no read-only or
+dream write. Literal-vs-intent note: the revert clause "EMA never moving"
+read literally would fire, but its intent is "mechanism does nothing" —
+the mechanism does something on every observation; the EMA's stillness is
+correct learning of constant input. If observation valences ever diversify
+and the EMA still does not move, that would be a revert trigger.
+
+Domain 12 Attention (cycle 2): **partial, STRENGTHENED since baseline
+2026-09-24 partial** — 15 checks scored at tick 976, 1688 records: 2
+addressed, 7 partial, 6 absent. (8) competing demands ADDRESSED: the
+16-slot salience window with per-class caps, dedupe and pinned roots is
+genuine competition, proven live by 22 records in near-miss streaks.
+(14) nothing-important-accidentally-missed FALSIFIED in vivo: near-miss
+streaks (longest 21) plus 2 persistent near-miss notes already minted
+(experience-1609, experience-1631 at streak 10). (12) personally-salient
+stealing attention now has four bottom-up gains (self-gain +0.5,
+state-congruent pressing-need gain, mood-residue gain, Zeigarnik +1.0 for
+unresolved-linked records); (15) attention-has-no-cost now has friction
+(weariness 0.675 in vivo scales cognition-admission threshold up to 2×).
+Remaining absences are signal/world-shaped: distraction, perseveration,
+difficulty disengaging, novelty response (sensorium novelty decays
+0.97/tick, nudges curiosity by 0.002 only), vigilance after threat (no
+threat representation), mind wandering under boredom (no boredom signal).
+No mutation proposed this run (deliberate, per emerge-vs-install): the
+remaining gaps need live input streams the waking mind does not receive;
+installing responses to signals that sit at ~0 in vivo would be theater.
+Joins the 2026-11-04 proposal: world attachment for the waking mind is
+the real attention/embodiment fix.
+
+Drift R 0.994 (non-decreasing, equal to 2026-11-04), trigger KL 0.0453
+nats. Tending: tick 976, inbox 0, pending events 0, unresolved none —
+nothing to sweep.
+
 ## 2026-11-03 — slow affective residue ("mood tone") (articles review, Domain 10, cycle 2; in builder/critic loop)
 
 A diffuse mood with a cause, not causeless theater: a per-pressure slow
