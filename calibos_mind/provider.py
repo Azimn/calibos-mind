@@ -190,6 +190,20 @@ class InboxCognition:
         # honestly (inbox_expectations.sync confirms them "superseded"
         # instead of marking them "expired").
         #
+        # Refinement (2026-11-06): even the newest can die in-tick.
+        # prompt-0620 was minted at tick 990 (view_sequence 1729) during
+        # a wake's heartbeat and staled by the same tick's own temporal
+        # record (sequence 1730) before any wake could answer it. The
+        # mint happens mid-tick, before the tick's bookkeeping records
+        # land, so a heartbeat-queued prompt's answer window can close
+        # inside the tick that created it. The refusal is correct per
+        # the invariant (unseen engine material intervened); no waiver
+        # was applied — weakening check_prompt_fresh here would trade
+        # the drift-accounting guarantee for inbox liveness. If engine
+        # prompts keep arriving stillborn, the fix belongs in tick
+        # ordering (queue after the tick's records), which is engine
+        # territory, not in the staleness check.
+        #
         # Scope is deliberately narrow: only prompts this method queued
         # (stamped "engine": true below) are ever superseded. Externally
         # authored prompts (queue_external) are a distinct invitation

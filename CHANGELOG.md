@@ -11,6 +11,10 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-06 — inbox: document in-tick stillborn engine prompts (comment only, no behavior change)
+
+During the morning wake, prompt-0620 was minted by the heartbeat at tick 990 (view_sequence 1729) and refused at answer time: the same tick's own temporal record (sequence 1730, engine cognition) staled it before any wake could answer. The refusal was correct per the staleness invariant — unseen engine material intervened — and the prompt was discarded with the expectation settled as refused-stale-view. Recorded the finding as a comment on `InboxCognition.think` (the 2026-09-28 queue-time supersede note): even the newest prompt can die in-tick, because the mint happens mid-tick before the tick's bookkeeping records land. Deliberately no waiver in `check_prompt_fresh`: weakening the check would trade the drift-accounting guarantee for inbox liveness. If engine prompts keep arriving stillborn, the fix belongs in tick ordering (queue after the tick's records), which is engine territory. `tests/test_queue.py`: 7 passed.
+
 ## 2026-11-05 — mutation assessment: learned event expectations KEEP; articles review, Domain 12 Attention (cycle 2)
 
 Assessment only, no code change. Learned event expectations (shipped

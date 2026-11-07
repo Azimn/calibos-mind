@@ -1,10 +1,10 @@
 {
   "status": "reconciled",
-  "tick": 984,
-  "opened_at": "2026-11-06T07:23:44.070009+00:00",
+  "tick": 1000,
+  "opened_at": "2026-11-07T07:23:43.333740+00:00",
   "open_loops": [],
-  "ablation_arm": "WITHHELD",
-  "reconciled_at": "2026-11-06T07:23:52.330095+00:00",
-  "wake_id": "experience-1720",
+  "ablation_arm": "FULL",
+  "reconciled_at": "2026-11-07T07:23:52.868020+00:00",
+  "wake_id": "experience-1750",
   "silent": false
 }
