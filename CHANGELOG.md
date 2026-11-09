@@ -11,6 +11,98 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-08 — init can no longer destroy live state; one canonical sidecar redirect (lifeboat §2 prerequisites 1–2)
+
+Two protective fixes for the recurring live-file-loss class (2026-10-08,
+2026-10-22, 2026-11-08: a standalone critic script ran `cmd_init(force=False)`
+with only part of the CLI path set redirected; because its tmp DB did not
+exist, init proceeded as a "fresh init" and unlinked four live sidecars —
+mood.json restored from git, the other three gitignored and lost).
+
+**Fix 1 — cmd_init refuses rather than discard orphaned state**
+(`calibos_mind/cli.py`). The sidecar wipe ran on ANY init that passed the
+first guard (store-present-without-force), including fresh inits — the
+wipe was only ever semantically a *reseed* operation. New semantics:
+store present + no --force → refuse (unchanged); store present + --force →
+reseed exactly as before (the store's presence anchors the destruction);
+no store + no sidecars → fresh init (unchanged); no store + sidecars
+present → REFUSE via the new `_orphan_state_refusal` — without --force
+always, and even with --force when any present sidecar still sits at its
+live location (parent == the new import-time `_live_base` snapshot).
+--force lifts the refusal only when every present sidecar has been
+redirected away from the live tree, preserving the test suite's
+legitimate tmp-dir reseeds. Everything the wipe touches is enumerated in
+one helper, `_init_wipe_targets` (the unlinked sidecars, the two
+.reset()-overwritten trackers, the expectation-policy sidecar derived
+from INBOX's parent, and the PROPOSALS/ARCHIVE contents). Three new
+regression tests in tests/test_init.py pin the incident shape, the
+force+redirected shape, and the force+live-location refusal.
+
+**Fix 2 — one canonical redirect helper + meta-tests**
+(`tests/conftest.py`, `tests/test_sidecar_guard.py`). The complete
+redirect set (REDIRECTED) already lived in conftest, but only the pytest
+fixture applied it; every harness and standalone script hand-rolled its
+own subset, and each new sidecar silently armed the next loss (two of
+the hand-maintained copies had already drifted: the near-miss helper
+omitted MOOD, the dormancy helper omitted EXPECTATIONS and MOOD). The
+application logic is now a single function,
+`conftest.redirect_all_cli_paths(root, setter=None)`, returning the
+previous values for exact restore; the autouse fixture routes through
+it, and it is importable by standalone scripts (the 2026-11-08 vector,
+which no fixture can reach). Migrated the drop-in harnesses to it:
+tests/test_init.py, test_reseed_journal_stash.py, test_habits.py,
+test_familiarity.py, test_ambivalence.py, test_counterfactual.py,
+test_habits_silence_decay.py, test_habits_stale_note.py,
+test_persistent_near_miss_note.py, test_expectation.py,
+test_authored_dormancy.py, and
+tests/adversarial/test_builder_ambivalence_run_persistence_r1.py.
+Left as-is (not drop-in): the CliOnTmp context-manager classes
+(test_provenance, test_queue, test_consolidate, test_expectation_policy,
+the adversarial consolidate/attribution/remember/interoception harnesses)
+— they redirect deliberately narrow sets around non-init commands under
+custom DB filenames ("t.db"), and under pytest the autouse fixture
+already guarantees the complete set behind them. Guard tests extended:
+the helper must cover exactly REDIRECTED (including the derived
+expectation-policy path, CARTRIDGE_PATH untouched), and no other
+calibos_mind module may hold a module-level path constant into the tree
+— such a path cannot be redirected via cli and would reopen the class.
+
+No cartridge, protocol, or engine changes. Suite: 937 passed before,
+942 passed after (5 new tests: 3 init-refusal, 2 guard).
+
+## 2026-11-08 — silence decay for formed habits (Domain 15 Learning; builder/critic loop round 1)
+
+Extinction was trigger-conditional only: a formed habit decayed when its
+trigger dominated but a different action was chosen, and never decayed at
+all when its trigger simply stopped occurring (in vivo at tick 1024,
+`formed:hunger:seek_contact` sat at 0.70 with `last_tick` 720 — 304 ticks
+of silence, zero decay). `calibos_mind/habits.py` now charges one
+`DECAY_STEP` (0.05) per full `SILENCE_WINDOW_TICKS` (100) waking ticks of
+continuous trigger silence since the habit's last co-fire, reusing the
+existing removal floor (below 0.30, archived with a note naming trigger
+silence as the cause) and the same removal path as disuse decay (shared
+`_archive_removal` helper; the two decays compose and both feed the
+floor). One new per-habit field, `silence_windows_applied` (int,
+default 0): it is present in the entry only while > 0 (absence == 0,
+never backfilled at load, strict-load validated when present), so a
+habit firing regularly never carries the field and its entry stays
+byte-identical to the pre-mutation shape. A co-fire resets the clock
+(`last_tick` updates, field dropped). Ordering, documented in the code:
+the co-fire is processed before silence decay, so a habit that fires
+after a long silence is not charged for the windows that elapsed before
+it was exercised — the exercise ends the silence (the reverse order
+would charge decay on the firing tick and, at the floor, could
+remove-then-re-crystallize in one tick). Read-only commands and dream
+ticks never reach `observe_tick`, so neither can apply it; `init --force`
+wipes the state with the sidecar as before. No engine, cartridge, or
+other module changes. Fitness: 18 new tests in
+`tests/test_habits_silence_decay.py` (one step per window, the 99/100
+boundary, co-fire reset incl. the long-silence ordering pin, removal
+with a silence-named note, regularly-firing byte-identity,
+read-only/dream byte-identity, reseed wipe, determinism, load
+validation) — all pass; full suite 937 passed. Assess after 2026-11-22
+per the spec (`research/specs/2026-11-08-habit-silence-decay.md`).
+
 ## 2026-11-06 — inbox: document in-tick stillborn engine prompts (comment only, no behavior change)
 
 During the morning wake, prompt-0620 was minted by the heartbeat at tick 990 (view_sequence 1729) and refused at answer time: the same tick's own temporal record (sequence 1730, engine cognition) staled it before any wake could answer. The refusal was correct per the staleness invariant — unseen engine material intervened — and the prompt was discarded with the expectation settled as refused-stale-view. Recorded the finding as a comment on `InboxCognition.think` (the 2026-09-28 queue-time supersede note): even the newest prompt can die in-tick, because the mint happens mid-tick before the tick's bookkeeping records land. Deliberately no waiver in `check_prompt_fresh`: weakening the check would trade the drift-accounting guarantee for inbox liveness. If engine prompts keep arriving stillborn, the fix belongs in tick ordering (queue after the tick's records), which is engine territory. `tests/test_queue.py`: 7 passed.

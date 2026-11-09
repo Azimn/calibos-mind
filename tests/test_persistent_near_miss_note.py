@@ -178,13 +178,12 @@ def _noted(tmp: Path, rid: str):
 def _patched_cli(tmp: Path):
     """Point the CLI at synthetic paths — the COMPLETE redirect set
     (conftest's lesson: a partial set is how live sidecars get wiped).
-    Returns the saved globals for _restore_cli."""
-    saved = (cli.BASE, cli.DB, cli.INBOX, cli.DREAMS, cli.SALIENCE,
-             cli.INTEROCEPTION, cli.FAMILIARITY, cli.AMBIVALENCE,
-             cli.COUNTERFACTUAL, cli.HABITS, cli.DORMANCY, cli.PROVENANCE,
-             cli.EXPECTATIONS, cli.ARCHIVE, cli.PROPOSALS, cli.WAKE_LIVENESS,
-             cli.ABLATION_SALT_FILE, cli.ABLATION_LOG, cli._subject)
-    (tmp / "inbox").mkdir(exist_ok=True)
+    Routes through the canonical conftest.redirect_all_cli_paths (this
+    helper's hand-maintained copy of the set had already drifted: it
+    omitted MOOD). Returns the saved globals for _restore_cli."""
+    from conftest import redirect_all_cli_paths
+    saved = redirect_all_cli_paths(tmp)
+    saved["_subject"] = cli._subject
 
     def make_subject(provider=None):
         if provider is None:
@@ -197,34 +196,13 @@ def _patched_cli(tmp: Path):
         subject.workspace.availability_path = cli.ARCHIVE / "availability.json"
         return subject
 
-    cli.BASE = tmp
-    cli.DB = tmp / "mind.db"
-    cli.INBOX = tmp / "inbox"
-    cli.DREAMS = tmp / "dreams"
-    cli.SALIENCE = tmp / "salience.json"
-    cli.INTEROCEPTION = tmp / "interoception.json"
-    cli.FAMILIARITY = tmp / "familiarity.json"
-    cli.AMBIVALENCE = tmp / "ambivalence.json"
-    cli.COUNTERFACTUAL = tmp / "counterfactuals.json"
-    cli.HABITS = tmp / "habits-formed.json"
-    cli.DORMANCY = tmp / "authored-dormancy.json"
-    cli.PROVENANCE = tmp / "provenance.json"
-    cli.EXPECTATIONS = tmp / "expectations.json"
-    cli.ARCHIVE = tmp / "archive"
-    cli.PROPOSALS = tmp / "proposals"
-    cli.WAKE_LIVENESS = tmp / "wake_liveness.json"
-    cli.ABLATION_SALT_FILE = tmp / "ablation_salt"
-    cli.ABLATION_LOG = tmp / "ablation_log.jsonl"
     cli._subject = make_subject
     return saved
 
 
 def _restore_cli(saved):
-    (cli.BASE, cli.DB, cli.INBOX, cli.DREAMS, cli.SALIENCE,
-     cli.INTEROCEPTION, cli.FAMILIARITY, cli.AMBIVALENCE,
-     cli.COUNTERFACTUAL, cli.HABITS, cli.DORMANCY, cli.PROVENANCE,
-     cli.EXPECTATIONS, cli.ARCHIVE, cli.PROPOSALS, cli.WAKE_LIVENESS,
-     cli.ABLATION_SALT_FILE, cli.ABLATION_LOG, cli._subject) = saved
+    for name, value in saved.items():
+        setattr(cli, name, value)
 
 
 # -- fitness 1: streak 9 -> zero notes ----------------------------------------

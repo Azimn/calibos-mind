@@ -68,6 +68,13 @@ ABLATION_SALT_FILE = BASE / "ablation_salt"
 ABLATION_LOG = BASE / "ablation_log.jsonl"
 ABLATION_MIN_WAKES = 20
 
+# Import-time snapshot of the live tree root. Lowercase on purpose: this is
+# a reference point, not a store path — nothing may ever redirect it.
+# cmd_init compares current path values against it to tell "pointed at the
+# live tree" apart from "redirected at a synthetic tree" (test harnesses,
+# standalone scripts) — see _orphan_state_refusal.
+_live_base = BASE
+
 SEED_MEMORIES = [
     ("I prefer short, natural chat replies, and real depth only when it is asked for.",
      ("preference", "concise-chat")),
@@ -129,12 +136,113 @@ def _record_map(subject):
     return {r["id"]: r for r in subject.inspect()["workspace"]["records"]}
 
 
+def _init_wipe_targets():
+    """Everything cmd_init destroys or overwrites while (re)seeding.
+
+    (name, path, is_dir) triples, read from the module globals at call time
+    (so harness redirection is honored). The file sidecars are unlinked
+    outright; SALIENCE/INTEROCEPTION are overwritten by their trackers'
+    .reset(); PROPOSALS/ARCHIVE are directories whose contents are cleared
+    (the proposals journal is stash-copied first on the reseed path). The
+    expectation-policy sidecar has no module-level path constant — it is
+    derived from INBOX's parent (inbox_expectations.POLICY_FILE_NAME), so
+    it follows INBOX wherever INBOX points.
+    """
+    from .inbox_expectations import POLICY_FILE_NAME
+    return (
+        ("FAMILIARITY", FAMILIARITY, False),
+        ("AMBIVALENCE", AMBIVALENCE, False),
+        ("COUNTERFACTUAL", COUNTERFACTUAL, False),
+        ("HABITS", HABITS, False),
+        ("DORMANCY", DORMANCY, False),
+        ("PROVENANCE", PROVENANCE, False),
+        ("EXPECTATION_POLICY", INBOX.parent / POLICY_FILE_NAME, False),
+        ("EXPECTATIONS", EXPECTATIONS, False),
+        ("MOOD", MOOD, False),
+        ("SALIENCE", SALIENCE, False),
+        ("INTEROCEPTION", INTEROCEPTION, False),
+        ("PROPOSALS", PROPOSALS, True),
+        ("ARCHIVE", ARCHIVE, True),
+    )
+
+
+def _orphan_state_refusal(force):
+    """Refusal message if a fresh init would destroy existing sidecar state.
+
+    Returns None when the init may proceed. A fresh init (no store at DB)
+    on a coherent tree finds no sidecars, and this is a no-op. Sidecars
+    present WITHOUT a store mean the tree is incoherent — classically a
+    harness or standalone script that redirected DB but not the sidecar
+    paths, so cmd_init proceeded as a "fresh init" and unlinked live files
+    (2026-11-08: mood.json, expectations.json, authored-dormancy.json and
+    counterfactuals.json lost exactly this way). Destroying that state
+    silently is never correct:
+
+    - without --force, refuse — the caller may be pointed at the wrong
+      tree entirely;
+    - with --force, proceed ONLY when every present target has been
+      redirected away from the live tree (the test suite's legitimate
+      tmp-dir reseeds). State still sitting at its live location (parent
+      directory == _live_base) is refused even under --force: apart from a
+      reseed anchored by the store itself (DB present), no init path may
+      delete live sidecars.
+    """
+    present = []
+    for _name, path, is_dir in _init_wipe_targets():
+        if is_dir:
+            if path.exists() and any(path.iterdir()):
+                present.append(path)
+        elif path.exists():
+            present.append(path)
+    if not present:
+        return None
+    live = [p for p in present if p.parent == _live_base]
+    if live:
+        listed = ", ".join(sorted(p.name for p in live))
+        return (f"refusing to init: no store at {DB}, but live sidecar "
+                f"state exists ({listed}). A fresh init would discard it, "
+                f"and --force does not override this for state at its live "
+                f"location. If the store is truly gone, move the sidecars "
+                f"aside by hand first; if it is not gone, this init is "
+                f"pointed at the wrong tree.")
+    if not force:
+        listed = ", ".join(sorted(p.name for p in present))
+        return (f"refusing to init: no store at {DB}, but sidecar state "
+                f"from a previous store exists ({listed}). A fresh init "
+                f"would discard it. If that state is truly orphaned, "
+                f"re-run with --force to reseed and wipe it; otherwise "
+                f"restore the missing store or move the sidecars aside "
+                f"by hand.")
+    return None
+
+
 def cmd_init(args):
+    """Create the store, or reseed it with --force.
+
+    Protective semantics (2026-11-08): init never destroys existing state
+    silently.
+
+    - Store present, no --force: refuse (unchanged).
+    - Store present, --force: reseed — the store is unlinked and every
+      sidecar restarts with it (the proposals journal is stash-copied
+      first). The store's presence anchors the destruction: the caller is
+      demonstrably pointed at a real store.
+    - No store, no sidecars: fresh init — create and seed (unchanged).
+    - No store, sidecars present: REFUSE (see _orphan_state_refusal).
+      Before this revision the wipe below ran on ANY init that passed the
+      first guard, so a fresh init against an incoherent tree deleted
+      live sidecars it had no business touching.
+    """
     import shutil
 
     if DB.exists() and not args.force:
         print(f"store already exists at {DB} (use --force to reseed)")
         return 1
+    if not DB.exists():
+        refusal = _orphan_state_refusal(args.force)
+        if refusal is not None:
+            print(refusal)
+            return 1
     if args.force and DB.exists():
         DB.unlink()
     # Wipe tracker sidecars BEFORE constructing the subject (2026-10-02):
@@ -1544,8 +1652,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="mind", description="Calibos' private cognitive tool")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("init", help="create the store and seed identity")
-    p.add_argument("--force", action="store_true")
+    p = sub.add_parser("init", help="create the store and seed identity "
+                                    "(refuses rather than discard existing sidecar state)")
+    p.add_argument("--force", action="store_true",
+                   help="reseed: unlink the existing store and restart every sidecar with it")
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("note", help="record an observation and run one heartbeat")

@@ -14,7 +14,8 @@ This installs the *mechanism* (formation, growth, disuse decay, removal),
 never the *symptom*: no habit is authored here. Habits crystallize from
 lived (trigger, action) co-firing, strengthen with repetition up to a cap
 deliberately below the strongest authored habit (formed habits modulate,
-authored habits define identity), decay through disuse, and are removed
+authored habits define identity), decay through disuse and through
+trigger silence, and are removed
 with a written archival note — history archived with a reason, never
 silently deleted. A formed habit can conflict with goals: formation is
 pure repetition-based, which the taxonomy lists as a symptom of
@@ -109,6 +110,11 @@ GROWTH_CAP = 0.70
 DECAY_STEP = 0.05
 # Below this strength the habit is removed (with a written archival note).
 REMOVAL_FLOOR = 0.30
+# Full waking ticks of continuous trigger silence (measured from the
+# habit's last co-fire) that cost one DECAY_STEP each (domain 15,
+# 2026-11-08): the extinction curve for the second way a habit goes
+# unused — its trigger simply stops occurring.
+SILENCE_WINDOW_TICKS = 100
 # Namespace for formed habits; authored habits are never touched.
 FORMED_PREFIX = "formed:"
 # Bounded archive: removals are history worth keeping, but the sidecar must
@@ -126,6 +132,9 @@ CHANNEL_RULE_BYPASS_KINDS = frozenset({"apology"})
 # Written reason on every removal: history archived with a reason, never
 # silently deleted.
 REMOVAL_REASON = "decayed below formation floor through disuse"
+# Silence-decay removals name silence as the cause (same archival
+# discipline, mirrored wording).
+REMOVAL_REASON_SILENCE = "decayed below formation floor through trigger silence"
 # Consecutive non-improving bypass firings of one formed habit that mint
 # exactly one stale-habit note (domain 17 check 8).
 STALE_FIRINGS = 5
@@ -190,6 +199,12 @@ class HabitFormationTracker:
       need's delta for pressure triggers).
     - ``formed``: ``{"formed:<trigger>:<action>": {"trigger", "action",
       "strength", "peak", "created_tick", "cofires", "last_tick"}}``.
+      ``"silence_windows_applied"`` (domain 15, 2026-11-08) is present
+      only while > 0 (absence == 0): the count of full
+      ``SILENCE_WINDOW_TICKS``-tick windows of trigger silence already
+      decayed since the last co-fire. A co-fire drops it, so a habit
+      firing within every window never carries the field and its entry
+      stays byte-identical to the pre-mutation shape.
     - ``archived``: removal notes ``{"key", "peak", "lifespan_ticks",
       "reason", "archived_tick"}``, newest last, capped at
       ``ARCHIVE_CAP``.
@@ -379,6 +394,16 @@ class HabitFormationTracker:
                 if last < created:
                     problem = (f"entry {key!r} last_tick {last} "
                                f"< created_tick {created}")
+            if problem is None:
+                # Silence windows (domain 15, 2026-11-08): a missing key
+                # is a legitimate pre-mutation entry (absence == 0, never
+                # backfilled at load); a present one must be a
+                # non-negative non-bool int.
+                swa = meta.get("silence_windows_applied", 0)
+                if (not isinstance(swa, int) or isinstance(swa, bool)
+                        or swa < 0):
+                    problem = (f"entry {key!r} has non-int/negative "
+                               f"silence_windows_applied {swa!r}")
             if problem is not None:
                 raise ValueError(
                     f"habits sidecar 'formed' malformed: {problem}; "
@@ -510,6 +535,27 @@ class HabitFormationTracker:
         pending, self._pending = self._pending, None
         return pending
 
+    def _archive_removal(self, fkey: str, meta: dict, tick: int,
+                         reason: str) -> None:
+        """Archive a removed habit with a written reason, then delete it.
+
+        The single removal path shared by disuse decay and silence decay
+        (domain 15, 2026-11-08): the archival discipline is the same —
+        history archived with a reason, never silently deleted, and the
+        archive stays capped. The caller names the cause (disuse or
+        silence); when both decays apply on one tick the note names the
+        step that crossed the floor.
+        """
+        self.data["archived"].append({
+            "key": fkey,
+            "peak": meta["peak"],
+            "lifespan_ticks": int(tick) - meta["created_tick"],
+            "reason": reason,
+            "archived_tick": int(tick),
+        })
+        self.data["archived"] = self.data["archived"][-ARCHIVE_CAP:]
+        del self.data["formed"][fkey]
+
     # -- formation ---------------------------------------------------------
 
     def observe_tick(self, *, tick: int, trigger: str, action: str,
@@ -548,6 +594,16 @@ class HabitFormationTracker:
                 meta["peak"] = max(meta["peak"], meta["strength"])
             meta["cofires"] += 1
             meta["last_tick"] = int(tick)
+            # The silence clock restarts when the habit is exercised: a
+            # co-fire drops the counted windows (absence == 0), so the
+            # entry returns to its pristine shape. Ordering note: the
+            # co-fire is processed BEFORE the silence decay below, so a
+            # habit that fires after a long silence is not charged for
+            # the windows that elapsed before it was exercised — the
+            # exercise ends the silence. (The reverse order would charge
+            # the decay on the firing tick and, at the removal floor,
+            # could remove-then-re-crystallize the habit in one tick.)
+            meta.pop("silence_windows_applied", None)
         elif len(pair_entries) >= FORMATION_COFIRES:
             mean_delta = sum(e["delta"] for e in pair_entries) / len(pair_entries)
             if mean_delta <= 0:
@@ -562,21 +618,35 @@ class HabitFormationTracker:
                     "last_tick": int(tick),
                 }
 
+        # Silence decay (domain 15, 2026-11-08): a formed habit whose
+        # trigger has been silent for full SILENCE_WINDOW_TICKS-tick
+        # windows since its last co-fire fades one DECAY_STEP per
+        # window — the extinction curve for the second way a habit goes
+        # unused (its trigger simply stops occurring). Runs after the
+        # co-fire handling above, so a habit exercised on this tick
+        # never decays on it, and before the disuse decay below; both
+        # feed the same removal floor. Read-only commands and dream
+        # ticks never reach observe_tick, so neither can apply it.
+        for fkey, meta in list(self.data["formed"].items()):
+            windows_elapsed = ((int(tick) - meta["last_tick"])
+                               // SILENCE_WINDOW_TICKS)
+            applied = meta.get("silence_windows_applied", 0)
+            new_windows = windows_elapsed - applied
+            if new_windows > 0:
+                meta["strength"] = round(
+                    meta["strength"] - DECAY_STEP * new_windows, 6)
+                meta["silence_windows_applied"] = windows_elapsed
+                if meta["strength"] < REMOVAL_FLOOR:
+                    self._archive_removal(fkey, meta, tick,
+                                          REMOVAL_REASON_SILENCE)
+
         # Disuse decay: the trigger drove this tick but a different action
         # was chosen. A habit that never gets used in its own context fades.
         for fkey, meta in list(self.data["formed"].items()):
             if meta["trigger"] == trigger and meta["action"] != action:
                 meta["strength"] = round(meta["strength"] - DECAY_STEP, 6)
                 if meta["strength"] < REMOVAL_FLOOR:
-                    self.data["archived"].append({
-                        "key": fkey,
-                        "peak": meta["peak"],
-                        "lifespan_ticks": int(tick) - meta["created_tick"],
-                        "reason": REMOVAL_REASON,
-                        "archived_tick": int(tick),
-                    })
-                    self.data["archived"] = self.data["archived"][-ARCHIVE_CAP:]
-                    del self.data["formed"][fkey]
+                    self._archive_removal(fkey, meta, tick, REMOVAL_REASON)
 
         after = {k: v["strength"] for k, v in self.data["formed"].items()}
         state_changed = (set(before) != set(after) or

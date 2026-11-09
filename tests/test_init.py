@@ -29,30 +29,21 @@ from digital_subject.cartridge import load_cartridge
 def _patched_cli(tmp: Path):
     """Point the CLI at synthetic paths; returns (make_subject, restore).
 
-    Every module-level path cmd_init touches must be redirected —
-    DB and SALIENCE alone are not enough: cmd_init --force wipes the
-    PROPOSALS and ARCHIVE sidecar directories, and a fixture that
-    leaves those pointed at the live tree deletes real working files.
-    INBOX must be redirected too: cmd_init --force resets the
-    expectation-policy sidecar at INBOX's parent, which would otherwise
-    wipe the live policy state during a routine test run.
+    Routes through the canonical conftest.redirect_all_cli_paths — the
+    complete REDIRECTED set, not a hand-picked subset. (Earlier versions
+    of this helper redirected only the paths their author knew about:
+    DB and SALIENCE alone are not enough — cmd_init --force wipes the
+    PROPOSALS and ARCHIVE sidecar directories, and the expectation-policy
+    sidecar sits at INBOX's parent, so a partial fixture deletes real
+    working files from the live tree.)
     """
+    from conftest import redirect_all_cli_paths
+    saved = redirect_all_cli_paths(tmp)
+    saved["_subject"] = cli._subject
     db = tmp / "mind.db"
     salience = tmp / "salience.json"
     interoception = tmp / "interoception.json"
-    familiarity = tmp / "familiarity.json"
-    ambivalence = tmp / "ambivalence.json"
-    habits = tmp / "habits-formed.json"
-    provenance = tmp / "provenance.json"
     inbox = tmp / "inbox"
-    proposals = tmp / "proposals"
-    archive = tmp / "archive"
-    saved = (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
-             cli.AMBIVALENCE, cli.HABITS, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
-    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.AMBIVALENCE, \
-        cli.HABITS, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE = (
-            db, inbox, salience, interoception, familiarity, ambivalence,
-            habits, provenance, proposals, archive)
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -67,8 +58,8 @@ def _patched_cli(tmp: Path):
 
 
 def _restore(saved):
-    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.AMBIVALENCE, \
-        cli.HABITS, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE, cli._subject = saved
+    for name, value in saved.items():
+        setattr(cli, name, value)
 
 
 def _patched_cli_with_habits(tmp: Path):
@@ -220,11 +211,79 @@ def test_fixture_redirects_all_sidecar_paths():
         "fixture leaked redirected inbox path into the live CLI"
 
 
+def test_fresh_init_refuses_orphaned_sidecars_without_force():
+    """2026-11-08 regression: the incident shape. A caller redirected DB
+    (here: the whole canonical set, to tmp) but the tree holds sidecar
+    state with NO store — a fresh init must refuse rather than unlink
+    state it cannot account for. Before the fix, this exact shape
+    (cmd_init(force=False), DB absent) silently wiped the sidecars."""
+    tmp = Path(tempfile.mkdtemp(prefix="init-orphan-"))
+    make_subject, saved = _patched_cli(tmp)
+    try:
+        mood = tmp / "mood.json"
+        mood.write_text('{"residues": {"attachment": 0.327}}', encoding="utf-8")
+        proposals = tmp / "proposals"
+        proposals.mkdir(exist_ok=True)
+        (proposals / "proposals.json").write_text("{}", encoding="utf-8")
+        assert cli.cmd_init(_args(force=False)) == 1
+        assert mood.read_text(encoding="utf-8") == \
+            '{"residues": {"attachment": 0.327}}', "orphaned sidecar must survive"
+        assert (proposals / "proposals.json").exists(), \
+            "orphaned journal must survive"
+        assert not (tmp / "mind.db").exists(), \
+            "a refused init must not create a store"
+    finally:
+        _restore(saved)
+
+
+def test_fresh_init_force_wipes_only_when_redirected():
+    """--force lifts the orphan refusal when every present sidecar has
+    been redirected away from the live tree — the test suite's legitimate
+    tmp-dir reseed shape, preserved."""
+    tmp = Path(tempfile.mkdtemp(prefix="init-orphan-force-"))
+    make_subject, saved = _patched_cli(tmp)
+    try:
+        mood = tmp / "mood.json"
+        mood.write_text('{"residues": {"attachment": 0.327}}', encoding="utf-8")
+        assert cli.cmd_init(_args(force=True)) == 0
+        assert not mood.exists(), "redirected orphan must be wiped under --force"
+        assert (tmp / "mind.db").exists(), "forced fresh init must seed a store"
+    finally:
+        _restore(saved)
+
+
+def test_fresh_init_refuses_live_located_sidecar_even_with_force():
+    """--force must NOT let an init delete state at its live location.
+    Simulates the 2026-11-08 incident directly: DB redirected to a
+    nonexistent tmp path (so init sees 'no store') while MOOD still
+    points at the live tree (here, a fake live root)."""
+    tmp = Path(tempfile.mkdtemp(prefix="init-live-"))
+    make_subject, saved = _patched_cli(tmp)
+    fake_live = Path(tempfile.mkdtemp(prefix="init-fake-live-"))
+    live_mood = fake_live / "mood.json"
+    live_mood.write_text('{"residues": {"attachment": 0.327}}', encoding="utf-8")
+    saved_live_base, saved_mood = cli._live_base, cli.MOOD
+    cli._live_base, cli.MOOD = fake_live, live_mood
+    try:
+        assert cli.cmd_init(_args(force=True)) == 1
+        assert live_mood.read_text(encoding="utf-8") == \
+            '{"residues": {"attachment": 0.327}}', \
+            "live-located sidecar must survive even a forced fresh init"
+        assert not (tmp / "mind.db").exists(), \
+            "a refused init must not create a store"
+    finally:
+        cli._live_base, cli.MOOD = saved_live_base, saved_mood
+        _restore(saved)
+
+
 def _main():
     for fn in (test_single_definition, test_force_resets_sidecar_and_restarts_ids,
                test_no_force_refuses_existing,
                test_fixture_redirects_all_sidecar_paths,
-               test_init_force_recovers_from_corrupt_habits_sidecar):
+               test_init_force_recovers_from_corrupt_habits_sidecar,
+               test_fresh_init_refuses_orphaned_sidecars_without_force,
+               test_fresh_init_force_wipes_only_when_redirected,
+               test_fresh_init_refuses_live_located_sidecar_even_with_force):
         fn()
         print(f"PASS {fn.__name__}")
     print("all init tests passed")

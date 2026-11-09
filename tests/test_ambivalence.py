@@ -361,8 +361,9 @@ def _patched_cli(tmp: Path):
     Redirects the complete module-level path set cmd_init touches (2026-10-02):
     a helper that leaves SALIENCE/INTEROCEPTION/FAMILIARITY/PROPOSALS/ARCHIVE
     pointed at the live checkout lets cmd_init reset or wipe live mind state.
-    Mirrors tests/test_init.py's nine-path tuple.
+    Routes through the canonical conftest.redirect_all_cli_paths.
     """
+    from conftest import redirect_all_cli_paths
     db = tmp / "mind.db"
     inbox = tmp / "inbox"
     inbox.mkdir(exist_ok=True)
@@ -374,12 +375,8 @@ def _patched_cli(tmp: Path):
     provenance = tmp / "provenance.json"
     proposals = tmp / "proposals"
     archive = tmp / "archive"
-    saved = (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
-             cli.AMBIVALENCE, cli.HABITS, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE, cli._subject)
-    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.AMBIVALENCE, \
-        cli.HABITS, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE = (
-            db, inbox, salience, interoception, familiarity, ambivalence,
-            habits, provenance, proposals, archive)
+    saved = redirect_all_cli_paths(tmp)
+    saved["_subject"] = cli._subject
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -396,8 +393,8 @@ def _patched_cli(tmp: Path):
 
 
 def _restore_cli(saved):
-    (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
-     cli.AMBIVALENCE, cli.HABITS, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE, cli._subject) = saved
+    for name, value in saved.items():
+        setattr(cli, name, value)
 
 
 def test_init_force_wipes_sidecar():

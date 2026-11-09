@@ -472,12 +472,11 @@ def test_streak_pruned_when_habit_removed():
 # -- genome: read-only, dream isolation, reseed, fingerprint ------------------------
 
 def _patched_cli(tmp: Path):
-    """Point the CLI's store and sidecars at a tmp dir (mirrors
-    test_habits._patched_cli)."""
-    saved = (cli.DB, cli.INBOX, cli.HABITS, cli.SALIENCE, cli.INTEROCEPTION,
-             cli.FAMILIARITY, cli.AMBIVALENCE, cli.COUNTERFACTUAL,
-             cli.PROVENANCE, cli.ARCHIVE, cli.PROPOSALS, cli._subject)
-    (tmp / "inbox").mkdir(exist_ok=True)
+    """Point the CLI's store and sidecars at a tmp dir (routes through
+    the canonical conftest.redirect_all_cli_paths)."""
+    from conftest import redirect_all_cli_paths
+    saved = redirect_all_cli_paths(tmp)
+    saved["_subject"] = cli._subject
 
     def make_subject(provider=None):
         from calibos_mind.provider import InboxCognition
@@ -493,25 +492,13 @@ def _patched_cli(tmp: Path):
             counterfactual_path=str(cli.COUNTERFACTUAL),
             habits_path=str(cli.HABITS))
 
-    cli.DB = tmp / "mind.db"
-    cli.INBOX = tmp / "inbox"
-    cli.HABITS = tmp / "habits-formed.json"
-    cli.SALIENCE = tmp / "salience.json"
-    cli.INTEROCEPTION = tmp / "interoception.json"
-    cli.FAMILIARITY = tmp / "familiarity.json"
-    cli.AMBIVALENCE = tmp / "ambivalence.json"
-    cli.COUNTERFACTUAL = tmp / "counterfactuals.json"
-    cli.PROVENANCE = tmp / "provenance.json"
-    cli.ARCHIVE = tmp / "archive"
-    cli.PROPOSALS = tmp / "proposals"
     cli._subject = make_subject
     return saved
 
 
 def _restore_cli(saved):
-    (cli.DB, cli.INBOX, cli.HABITS, cli.SALIENCE, cli.INTEROCEPTION,
-     cli.FAMILIARITY, cli.AMBIVALENCE, cli.COUNTERFACTUAL,
-     cli.PROVENANCE, cli.ARCHIVE, cli.PROPOSALS, cli._subject) = saved
+    for name, value in saved.items():
+        setattr(cli, name, value)
 
 
 def test_readonly_commands_never_touch_streak_state():

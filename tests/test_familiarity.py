@@ -115,7 +115,9 @@ def _cycle(subject: CalibosSubject, save: bool = True):
 
 def _patched_cli(tmp: Path):
     """Point the CLI at synthetic paths (mirrors tests/test_init.py's
-    fixture, plus the familiarity sidecar). Returns (make_subject, restore)."""
+    fixture, plus the familiarity sidecar). Returns (make_subject, restore).
+    Routes through the canonical conftest.redirect_all_cli_paths."""
+    from conftest import redirect_all_cli_paths
     db = tmp / "mind.db"
     salience = tmp / "salience.json"
     interoception = tmp / "interoception.json"
@@ -126,14 +128,8 @@ def _patched_cli(tmp: Path):
     archive = tmp / "archive"
     ambivalence = tmp / "ambivalence.json"
     provenance = tmp / "provenance.json"
-    saved = (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION,
-             cli.FAMILIARITY, cli.HABITS, cli.AMBIVALENCE, cli.PROVENANCE, cli.PROPOSALS,
-             cli.ARCHIVE, cli._subject)
-    cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY, cli.HABITS, \
-        cli.AMBIVALENCE, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE = (
-            db, inbox, salience, interoception, familiarity, habits,
-            ambivalence, provenance, proposals, archive)
-    inbox.mkdir(exist_ok=True)
+    saved = redirect_all_cli_paths(tmp)
+    saved["_subject"] = cli._subject
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -149,9 +145,8 @@ def _patched_cli(tmp: Path):
 
 
 def _restore_cli(saved):
-    (cli.DB, cli.INBOX, cli.SALIENCE, cli.INTEROCEPTION, cli.FAMILIARITY,
-     cli.HABITS, cli.AMBIVALENCE, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE,
-     cli._subject) = saved
+    for name, value in saved.items():
+        setattr(cli, name, value)
 
 
 # -- fitness: streak builds to threshold, boost engages -----------------------

@@ -490,8 +490,11 @@ def _patched_cli(tmp: Path):
     Every module-level path cmd_init touches must be redirected — an
     unredirected sidecar path means cmd_init --force wipes the LIVE file
     during a routine test run (this actually deleted the live
-    familiarity.json before the HABITS line was added here).
+    familiarity.json before the HABITS line was added here). Routes
+    through the canonical conftest.redirect_all_cli_paths, which covers
+    the complete set.
     """
+    from conftest import redirect_all_cli_paths
     db = tmp / "mind.db"
     inbox = tmp / "inbox"
     inbox.mkdir(exist_ok=True)
@@ -503,13 +506,8 @@ def _patched_cli(tmp: Path):
     proposals = tmp / "proposals"
     archive = tmp / "archive"
     provenance = tmp / "provenance.json"
-    saved = (cli.DB, cli.INBOX, cli.HABITS, cli.SALIENCE, cli.INTEROCEPTION,
-             cli.FAMILIARITY, cli.AMBIVALENCE, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE,
-             cli._subject)
-    (cli.DB, cli.INBOX, cli.HABITS, cli.SALIENCE, cli.INTEROCEPTION,
-     cli.FAMILIARITY, cli.AMBIVALENCE, cli.PROVENANCE, cli.PROPOSALS,
-     cli.ARCHIVE) = (db, inbox, habits, salience, interoception,
-                     familiarity, ambivalence, provenance, proposals, archive)
+    saved = redirect_all_cli_paths(tmp)
+    saved["_subject"] = cli._subject
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -527,9 +525,8 @@ def _patched_cli(tmp: Path):
 
 
 def _restore_cli(saved):
-    (cli.DB, cli.INBOX, cli.HABITS, cli.SALIENCE, cli.INTEROCEPTION,
-     cli.FAMILIARITY, cli.AMBIVALENCE, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE,
-     cli._subject) = saved
+    for name, value in saved.items():
+        setattr(cli, name, value)
 
 
 def test_readonly_commands_leave_sidecar_byte_identical():

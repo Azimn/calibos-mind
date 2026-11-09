@@ -155,23 +155,15 @@ def _live_strength(subject, key):
 
 
 def _patched_cli(tmp: Path):
-    """Point every module-level path cmd_init/cmd_status touch at tmp."""
+    """Point every module-level path cmd_init/cmd_status touch at tmp.
+    Routes through the canonical conftest.redirect_all_cli_paths (this
+    helper's hand-maintained set omitted EXPECTATIONS and MOOD, which
+    cmd_init also wipes)."""
+    from conftest import redirect_all_cli_paths
     db = tmp / "mind.db"
     inbox = tmp / "inbox"
-    inbox.mkdir(exist_ok=True)
-    dreams = tmp / "dreams"
-    saved = (cli.DB, cli.INBOX, cli.DREAMS, cli.SALIENCE, cli.INTEROCEPTION,
-             cli.FAMILIARITY, cli.AMBIVALENCE, cli.COUNTERFACTUAL, cli.HABITS,
-             cli.DORMANCY, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE,
-             cli._subject)
-    (cli.DB, cli.INBOX, cli.DREAMS, cli.SALIENCE, cli.INTEROCEPTION,
-     cli.FAMILIARITY, cli.AMBIVALENCE, cli.COUNTERFACTUAL, cli.HABITS,
-     cli.DORMANCY, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE) = (
-        db, inbox, dreams, tmp / "salience.json", tmp / "interoception.json",
-        tmp / "familiarity.json", tmp / "ambivalence.json",
-        tmp / "counterfactuals.json", tmp / "habits-formed.json",
-        tmp / "authored-dormancy.json", tmp / "provenance.json",
-        tmp / "proposals", tmp / "archive")
+    saved = redirect_all_cli_paths(tmp)
+    saved_subject = cli._subject
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -190,10 +182,9 @@ def _patched_cli(tmp: Path):
     cli._subject = make_subject
 
     def restore():
-        (cli.DB, cli.INBOX, cli.DREAMS, cli.SALIENCE, cli.INTEROCEPTION,
-         cli.FAMILIARITY, cli.AMBIVALENCE, cli.COUNTERFACTUAL, cli.HABITS,
-         cli.DORMANCY, cli.PROVENANCE, cli.PROPOSALS, cli.ARCHIVE,
-         cli._subject) = saved
+        for n, v in saved.items():
+            setattr(cli, n, v)
+        cli._subject = saved_subject
     return restore
 
 

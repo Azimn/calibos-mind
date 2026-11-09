@@ -28,36 +28,19 @@ def _tmp():
 def _patched_cli(tmp: Path):
     """Redirect every module-level path cmd_init touches at tmp, including BASE.
 
-    BASE is redirected (unlike the older helpers) because the journal stash
-    is written under BASE/journal-stash — leaving BASE live would create
-    dated stash directories in the live checkout during routine test runs.
+    Routes through the canonical conftest.redirect_all_cli_paths (the
+    complete REDIRECTED set). BASE is in that set, which matters here:
+    the journal stash is written under BASE/journal-stash — leaving BASE
+    live would create dated stash directories in the live checkout
+    during routine test runs.
     """
+    from conftest import redirect_all_cli_paths
+    saved = redirect_all_cli_paths(tmp)
+    saved_subject = cli._subject
     db = tmp / "mind.db"
     inbox = tmp / "inbox"
-    inbox.mkdir(exist_ok=True)
     salience = tmp / "salience.json"
     interoception = tmp / "interoception.json"
-    familiarity = tmp / "familiarity.json"
-    ambivalence = tmp / "ambivalence.json"
-    habits = tmp / "habits-formed.json"
-    provenance = tmp / "provenance.json"
-    proposals = tmp / "proposals"
-    archive = tmp / "archive"
-    names = ("BASE", "DB", "INBOX", "SALIENCE", "INTEROCEPTION", "FAMILIARITY",
-             "AMBIVALENCE", "HABITS", "PROVENANCE", "PROPOSALS", "ARCHIVE",
-             "_subject")
-    saved = tuple(getattr(cli, n) for n in names)
-    setattr(cli, "BASE", tmp)
-    cli.DB = db
-    cli.INBOX = inbox
-    cli.SALIENCE = salience
-    cli.INTEROCEPTION = interoception
-    cli.FAMILIARITY = familiarity
-    cli.AMBIVALENCE = ambivalence
-    cli.HABITS = habits
-    cli.PROVENANCE = provenance
-    cli.PROPOSALS = proposals
-    cli.ARCHIVE = archive
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -70,8 +53,9 @@ def _patched_cli(tmp: Path):
     cli._subject = make_subject
 
     def restore():
-        for n, v in zip(names, saved):
+        for n, v in saved.items():
             setattr(cli, n, v)
+        cli._subject = saved_subject
 
     return restore
 

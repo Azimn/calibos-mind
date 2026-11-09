@@ -236,41 +236,25 @@ def test_explicit_expected_valence_with_existing_ema():
 # -- fitness 4: read-only + dream paths never write ---------------------------
 
 def _patched_cli(tmp: Path):
-    """Redirect every module-level path cmd_* touches at tmp (the
-    reseed-stash test's pattern, extended with EXPECTATIONS).
+    """Redirect every module-level path cmd_* touches at tmp.
 
-    The complete set cmd_init --force touches: BASE, DB, INBOX, SALIENCE,
-    INTEROCEPTION, FAMILIARITY, AMBIVALENCE, COUNTERFACTUAL, HABITS,
-    DORMANCY, PROVENANCE, PROPOSALS, ARCHIVE, EXPECTATIONS, _subject.
-    (2026-10-22: this helper once omitted COUNTERFACTUAL and DORMANCY —
+    The complete set cmd_init --force touches is conftest's REDIRECTED
+    (BASE, DB, INBOX, SALIENCE, INTEROCEPTION, FAMILIARITY, AMBIVALENCE,
+    COUNTERFACTUAL, HABITS, DORMANCY, PROVENANCE, PROPOSALS, ARCHIVE,
+    EXPECTATIONS, and the rest) — routed through the canonical
+    conftest.redirect_all_cli_paths. (2026-10-22: this helper once
+    hand-maintained the set and omitted COUNTERFACTUAL and DORMANCY —
     cmd_init --force unlinks those too, so the omission deleted the live
-    authored-dormancy.json during a routine test run. Every path
-    cmd_init touches must be redirected, no exceptions.)
+    authored-dormancy.json during a routine test run. The set now lives
+    in exactly one place.)
     """
-    names = ("BASE", "DB", "INBOX", "SALIENCE", "INTEROCEPTION",
-             "FAMILIARITY", "AMBIVALENCE", "COUNTERFACTUAL", "HABITS",
-             "DORMANCY", "PROVENANCE", "PROPOSALS", "ARCHIVE",
-             "EXPECTATIONS", "_subject")
-    saved = tuple(getattr(cli, n) for n in names)
-    (tmp / "inbox").mkdir(exist_ok=True)
-    paths = {
-        "BASE": tmp,
-        "DB": tmp / "mind.db",
-        "INBOX": tmp / "inbox",
-        "SALIENCE": tmp / "salience.json",
-        "INTEROCEPTION": tmp / "interoception.json",
-        "FAMILIARITY": tmp / "familiarity.json",
-        "AMBIVALENCE": tmp / "ambivalence.json",
-        "COUNTERFACTUAL": tmp / "counterfactuals.json",
-        "HABITS": tmp / "habits-formed.json",
-        "DORMANCY": tmp / "authored-dormancy.json",
-        "PROVENANCE": tmp / "provenance.json",
-        "PROPOSALS": tmp / "proposals",
-        "ARCHIVE": tmp / "archive",
-        "EXPECTATIONS": tmp / "expectations.json",
-    }
-    for n, v in paths.items():
-        setattr(cli, n, v)
+    from conftest import redirect_all_cli_paths
+    saved = redirect_all_cli_paths(tmp)
+    saved_subject = cli._subject
+    paths = {n: getattr(cli, n) for n in (
+        "BASE", "DB", "INBOX", "SALIENCE", "INTEROCEPTION",
+        "FAMILIARITY", "AMBIVALENCE", "COUNTERFACTUAL", "HABITS",
+        "DORMANCY", "PROVENANCE", "PROPOSALS", "ARCHIVE", "EXPECTATIONS")}
     cartridge = load_cartridge(cli.CARTRIDGE_PATH)
 
     def make_subject(provider=None):
@@ -286,8 +270,9 @@ def _patched_cli(tmp: Path):
     cli._subject = make_subject
 
     def restore():
-        for n, v in zip(names, saved):
+        for n, v in saved.items():
             setattr(cli, n, v)
+        cli._subject = saved_subject
 
     return restore, make_subject
 
