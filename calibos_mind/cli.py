@@ -56,6 +56,7 @@ DORMANCY = BASE / "authored-dormancy.json"
 PROVENANCE = BASE / "provenance.json"
 EXPECTATIONS = BASE / "expectations.json"
 MOOD = BASE / "mood.json"
+PERSONALITY_DRIFT = BASE / "personality-drift.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
@@ -159,6 +160,7 @@ def _init_wipe_targets():
         ("EXPECTATION_POLICY", INBOX.parent / POLICY_FILE_NAME, False),
         ("EXPECTATIONS", EXPECTATIONS, False),
         ("MOOD", MOOD, False),
+        ("PERSONALITY_DRIFT", PERSONALITY_DRIFT, False),
         ("SALIENCE", SALIENCE, False),
         ("INTEROCEPTION", INTEROCEPTION, False),
         ("PROPOSALS", PROPOSALS, True),
@@ -317,6 +319,13 @@ def cmd_init(args):
     # brick --force before the wipe ran.
     if MOOD.exists():
         MOOD.unlink()
+    # Conduct-drift sidecar (2026-11-09): stale lifetime/window counts
+    # must never attach to a reseeded incarnation's ticks (same bug
+    # class as the salience/familiarity resets above). Wiped BEFORE
+    # construction: the tracker fails loud on a corrupt sidecar, which
+    # would otherwise brick --force before the wipe ran.
+    if PERSONALITY_DRIFT.exists():
+        PERSONALITY_DRIFT.unlink()
     subject = _subject()
     with subject._transaction():
         for text, concept_pair in SEED_MEMORIES:
@@ -383,6 +392,15 @@ def cmd_note(args):
 def _run_tick(subject):
     before = len(subject.inspect()["trace"])
     needs_before = dict(subject.engine.state.needs)
+    # Conduct-drift instrument (domain 16, 2026-11-09): the tracker is
+    # constructed here, before the heartbeat, so a corrupt sidecar fails
+    # loudly before the tick runs (fail-closed, same precedent as
+    # mood/interoception), never silently resets. It is fed after the
+    # tick's action is chosen, below. Waking ticks only — _run_tick
+    # never serves dream ticks, and read-only commands never tick, so
+    # neither can write the sidecar.
+    from .personality import ConductDriftTracker
+    ptracker = ConductDriftTracker(PERSONALITY_DRIFT)
     # Host-layer feeder (2026-10-08): slow tick-count rhythm of the frozen
     # engine's food/drink events — waking ticks only. Enqueued before the
     # heartbeat so the tick consumes them as external events; the engine's
@@ -391,6 +409,12 @@ def _run_tick(subject):
     from . import feeder as _feeder
     _feeder.maybe_feed(subject)
     result = subject.heartbeat()
+    # Conduct-drift feed: record the tick's chosen action. A tick with
+    # no chosen action records nothing (observe returns False); a missed
+    # observation is safe, a misattributed one is the hazard. Save only
+    # on a recorded tick (no-op write discipline, mirroring familiarity).
+    if ptracker.observe(result["tick"], result.get("action")):
+        ptracker.save()
     # Ambivalence traces (2026-10-01): flush any contested-margin markers
     # the observation wrapper noted during the tick. Flushed HERE, before
     # the habits block below — not after it — because the habits
@@ -1553,6 +1577,34 @@ def cmd_drift(args):
         print(f"  baseline: {kl['baseline_hist']}")
     else:
         print(f"trigger KL: not scored — {kl['reason']}")
+    # Conduct drift (domain 16, 2026-11-09): L1 distance between the
+    # trailing-window action shares and the lifetime action shares, plus
+    # a trait snapshot read live at report time. Read-only: the tracker
+    # constructor only reads the sidecar; this command never writes it.
+    from .personality import (
+        MIN_WINDOW,
+        WINDOW,
+        ConductDriftTracker,
+        trait_snapshot,
+    )
+    ptracker = ConductDriftTracker(PERSONALITY_DRIFT)
+    distance, wshares, lshares = ptracker.drift()
+    if distance is None:
+        print(f"conduct drift: insufficient window "
+              f"({len(ptracker.window)}/{MIN_WINDOW})")
+    else:
+        def _fmt(shares):
+            return "{" + ", ".join(f"{a}: {s:.2f}"
+                                   for a, s in shares.items()) + "}"
+        print(f"conduct drift (last {WINDOW} vs lifetime): {distance:.2f}  "
+              f"window {_fmt(wshares)} lifetime {_fmt(lshares)}")
+    traits = trait_snapshot(subject)
+    formed = {k: round(v, 3) for k, v in traits["formed_habits"].items()}
+    narrative = {k: round(v, 3) for k, v in traits["narrative"].items()}
+    prefs = traits["preferences"]
+    print(f"  traits: formed habits {formed} | preferences "
+          f"authored={prefs['authored']} learned={prefs['learned']} | "
+          f"narrative {narrative}")
     return 0
 
 

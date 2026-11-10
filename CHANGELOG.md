@@ -11,6 +11,92 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-09 — conduct-drift instrument: a number for Domain 16's "No personality drift"
+
+Domain 16's most diagnostic check ("No personality drift") had baseline
+"untestable yet, the metric is the falsifier". The 2026-11-09 pass found
+drift testable in the salience/conduct sense but unmeasured at the trait
+level: authored salience share fell 31% -> 0.49% since baseline, the
+action mix moved (approach 43% -> 20%, seek_contact 29% -> 54%), authored
+habits atrophied while formed habits took over conduct — and none of that
+was instrumented as a drift reading. R measures grown/authored salience,
+not personality.
+
+**What** (`calibos_mind/personality.py`, new; `calibos_mind/cli.py`;
+spec: `research/specs/2026-11-09-personality-drift-instrument.md`).
+`ConductDriftTracker` owns a new sidecar, `personality-drift.json`:
+`{"lifetime": {action: count}, "window": [[tick, action]]}` — the window
+holds the last 100 action-bearing waking ticks (oldest dropped on
+append; cap is module constant `WINDOW = 100`), `lifetime` counts every
+action-bearing waking tick since the sidecar was created. No other
+fields, no timestamps, no thought text. `drift()` returns
+`(distance, window_shares, lifetime_shares)` where distance is the L1
+distance between the window shares and the lifetime shares over the
+union of actions (range [0, 2]); below `MIN_WINDOW = 20` action-bearing
+ticks the drift is `None` ("insufficient window") and the sidecar still
+accumulates. `mind drift` gains one line after the trigger-KL block
+(`conduct drift (last 100 vs lifetime): 0.42  window {...} lifetime
+{...}`, or `conduct drift: insufficient window (n/20)`), plus a trait
+line: `{formed_habit: strength}` for each formed habit, authored vs
+learned preference counts, and narrative-claim confidences — read live
+from the subject at report time by `trait_snapshot()`, never persisted
+in the sidecar.
+
+**Measurement, not behavior.** The tracker is fed ONLY from the
+waking-tick path (`cli._run_tick`), after the tick's action is chosen;
+ticks with no chosen action record nothing. No action selection,
+retrieval, or cognition path changes. No cartridge or engine change, no
+fingerprint change, no migration. New-sidecar procedure followed in
+full: path constant in `cli.py`, filename in `tests/conftest.py`
+`_FILENAMES`, name in `REDIRECTED` (`test_sidecar_guard.py` enforces
+all three). Read-only commands and dream ticks never write the sidecar
+(byte-identical check); `cmd_init --force` wipes it (added to
+`_init_wipe_targets` and the pre-construction unlink block, same
+fail-loud-before-wipe ordering as mood). Determinism: identical
+scripted tick sequences yield byte-identical sidecars (no clock, no
+RNG, no model calls). A corrupt sidecar raises ValueError at load
+(fail-closed, same precedent as mood/interoception), never silently
+resets; the tracker is constructed before the heartbeat in `_run_tick`
+so a corrupt file fails before the tick runs.
+
+**Tests** (`tests/test_personality.py`, 17 new): the full fitness
+battery from the spec — shifted mix drift > 0.4 (1.6 constructed, 0.6
+through `observe()`), identical mix drift exactly 0.0, bounds with
+disjoint sets exactly 2.0 plus a mix sweep staying inside [0, 2],
+window cap (105 ticks -> exactly 100 rows, oldest dropped, lifetime
+still 105), below-minimum accumulation with the 20th tick flipping the
+reading on, read-only sweep + dream tick byte-identical, `init --force`
+wipe with a fresh store starting empty, determinism across two
+identical scripted runs, trait snapshot matching live subject state
+both on injected state and after real formation/learning ticks, and
+corrupt-sidecar / no-action-tick / save-load round-trip unit tests.
+Full suite green: 959 passed (17 new personality tests included).
+One pre-existing test needed a harness fix to stay green (see below).
+
+**Revert signal** (spec): drift non-zero on identical mixes, drift
+above 2.0, drift exactly 2.0 while window and lifetime share an action,
+sidecar written by a read-only command or dream tick, sidecar surviving
+`init --force`, any existing test regressing. In vivo: drift stuck at
+0.0 across a visibly changed mix, or pinned at max while conduct is
+stable. Revert = delete `personality.py`, its wiring in `cli.py` and
+`drift.py`, the sidecar, and the `mind drift` line. Assess after
+2026-11-23.
+
+**Harness fix the new sidecar forced** (`tests/test_person_contact.py`).
+The full suite exposed one regression: `CliOnTmp` hand-rolls its own
+redirect set and omitted `PERSONALITY_DRIFT`, so the two scenarios of
+`test_no_from_no_relationship_and_store_unchanged` shared one sidecar
+at the fixture tmp path — the legacy scenario's `mind drift` output
+read 2/20 (inheriting the new scenario's tick) against 1/20, breaking
+the identical-output assertion. The fix adds `PERSONALITY_DRIFT` to
+`CliOnTmp`'s targets, per that class's own stated rule ("every path
+`cmd_init` touches is redirected, no exceptions"). Note for the next
+sidecar: `test_sidecar_guard.py` enforces the canonical conftest set
+only — hand-rolled sets like `CliOnTmp` (and the adversarial
+round-trip harnesses) are not covered by the guard and must be audited
+by hand. `CliOnTmp` still omits `MOOD` and the ablation paths, a
+pre-existing gap untouched here.
+
 ## 2026-11-08 — init can no longer destroy live state; one canonical sidecar redirect (lifeboat §2 prerequisites 1–2)
 
 Two protective fixes for the recurring live-file-loss class (2026-10-08,

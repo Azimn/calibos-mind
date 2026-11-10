@@ -1,0 +1,59 @@
+{
+ "lifetime": {
+  "approach": 7,
+  "explore": 1,
+  "observe": 2,
+  "rest": 1,
+  "self_soothe": 1
+ },
+ "window": [
+  [
+   1041,
+   "observe"
+  ],
+  [
+   1042,
+   "approach"
+  ],
+  [
+   1043,
+   "self_soothe"
+  ],
+  [
+   1044,
+   "approach"
+  ],
+  [
+   1045,
+   "approach"
+  ],
+  [
+   1046,
+   "explore"
+  ],
+  [
+   1047,
+   "rest"
+  ],
+  [
+   1048,
+   "approach"
+  ],
+  [
+   1049,
+   "approach"
+  ],
+  [
+   1050,
+   "approach"
+  ],
+  [
+   1051,
+   "observe"
+  ],
+  [
+   1052,
+   "approach"
+  ]
+ ]
+}

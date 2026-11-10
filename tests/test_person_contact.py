@@ -59,6 +59,7 @@ class CliOnTmp:
                    "DORMANCY": self.tmp / "authored-dormancy.json",
                    "PROVENANCE": self.tmp / "provenance.json",
                    "EXPECTATIONS": self.tmp / "expectations.json",
+                   "PERSONALITY_DRIFT": self.tmp / "personality-drift.json",
                    "ARCHIVE": self.tmp / "archive",
                    "PROPOSALS": self.tmp / "proposals",
                    "WAKE_LIVENESS": self.tmp / "wake_liveness.json"}
