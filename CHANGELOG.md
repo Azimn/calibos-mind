@@ -11,6 +11,81 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-10 — goal-structure instrument: a number for Domain 17's "Goal structure"
+
+Domain 17's diagnostic checks had no continuous measurement: the
+2026-11-10 pass (tick 1056, 1876 records) found the entire goal
+machinery unexercised in vivo — zero open commitments (2 total, both
+kept CLI test commitments), zero open expectations (21 total, all
+confirmed `inbox:pr`), engine concerns `{}` empty, `unresolved` empty,
+zero `promise_made` events in 1056 ticks / ~47 days. Behavioural
+mechanisms (dormancy, shielding, wish-to-plan staging) would be dead
+code against a goal population of zero.
+
+**What** (`calibos_mind/goals.py`, new; `calibos_mind/cli.py`;
+spec: `research/goal-structure-instrument-spec-2026-11-10.md`).
+`GoalTracker` owns a new sidecar, `goals.json`:
+`{"rows": [...], "known": {"<id>": {"actor", "description", "kind",
+"first_tick"}}, "tension": {"current", "longest"}}` — `rows` holds the
+last 100 observed waking ticks (oldest dropped on append; cap is module
+constant `ROW_CAP = 100`), each row a per-tick snapshot (open commitment
+count, oldest-open age in ticks or null, counts by commitment status
+open/overdue/kept/broken/released, due-soon count, open expectation
+count, counts by expectation status pending/confirmed/violated/expired);
+`known` records every commitment id the instrument has ever seen, with
+actor, description, kind, and first-seen tick; `tension` tracks the
+longest run of consecutive observed ticks with >= 1 open commitment
+and the current run. No other fields, no timestamps, no thought text.
+New-goal detection diffs the commitment id set against the ids already
+known: actor `"self"` is recorded as `authored`, any other actor as a
+`candidate` accidentally-formed goal (the frozen engine creates such
+commitments only from `promise_made` events or event metadata; the CLI
+`mind intend` path always sets actor `"self"`). Formation is never
+inferred from text content. Due-soon is `due_tick - tick <= 2` on
+`open` commitments, exactly the window `derive_continuity_influence`
+uses. `report(subject, sidecar)` is a pure read of live state + sidecar
+(counts and oldest-open age live, tension spans and formed-goal history
+from the sidecar); there is no report watermark, because the `goals`
+command itself must leave the sidecar byte-identical. `mind goals`
+prints the report; `mind drift` gains one goals line (open counts,
+oldest-open age, tension span), read-only.
+
+**Measurement, not behavior.** The tracker is fed ONLY from the
+waking-tick path (`cli._run_tick`), right after the tick, at the same
+hook as the personality instrument's `observe()`; every waking tick
+records a row, even a zero-open tick (a zero resets the tension run
+and is data, not an absence). A commitment or expectation the inbox
+sync registers later in the same tick is first observed on the next
+tick — a one-tick lag inherent to the hook. No commitment or
+expectation is created, resolved, or re-ranked here. No cartridge or
+engine change, no fingerprint change, no migration. New-sidecar
+procedure followed in full: path constant in `cli.py`, filename in
+`tests/conftest.py` `_FILENAMES`, name in `REDIRECTED`
+(`test_sidecar_guard.py` enforces all three). Read-only commands
+(drift, status, review, inbox, goals, think, dream command) and dream
+ticks never write the sidecar (byte-identical check); `cmd_init
+--force` wipes it (added to `_init_wipe_targets` and the
+pre-construction unlink block, same fail-loud-before-wipe ordering as
+mood/personality). Determinism: identical scripted tick sequences
+yield byte-identical sidecars (no clock, no RNG, no model calls;
+commitment ids are store input, so the determinism script uses a
+fixed id). A corrupt sidecar raises ValueError at load (fail-closed,
+same precedent as mood/interoception/personality), never silently
+resets; the tracker is constructed before the heartbeat in `_run_tick`
+so a corrupt file fails before the tick runs. `observe()` and
+`report()` raise ValueError on a subject without continuity state
+rather than reporting a silent zero.
+
+**Tests** (`tests/test_goals.py`, 24 tests, synthetic /tmp stores
+only): exact counts for 0/1/3 open commitments in mixed statuses,
+oldest-open age exact, due-soon boundary at remainder 2 vs 3,
+candidate vs authored detection (including the real `mind intend`
+path), tension span K with reset keeping the longest, read-only sweep
+byte-identical (and no sidecar minted on a fresh store), corrupt
+sidecar variants, fail-closed before the tick advances, `init --force`
+wipe including a corrupt sidecar, determinism on replay, report
+purity, expectation outcome tallies, 100-row cap.
+
 ## 2026-11-09 — conduct-drift instrument: a number for Domain 16's "No personality drift"
 
 Domain 16's most diagnostic check ("No personality drift") had baseline

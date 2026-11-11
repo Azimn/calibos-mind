@@ -1,0 +1,262 @@
+{
+ "known": {
+  "1c211f3c-dae5-46a5-8c80-28686c1f340f": {
+   "actor": "world",
+   "description": "test commitment for resolve",
+   "first_tick": 1057,
+   "kind": "candidate"
+  },
+  "6f995f98-6608-4f60-a379-848876b81e2c": {
+   "actor": "world",
+   "description": "I will test the resolve command end to end",
+   "first_tick": 1057,
+   "kind": "candidate"
+  }
+ },
+ "rows": [
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1057
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1058
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1059
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1060
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1061
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1062
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1063
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1064
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1065
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1066
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1067
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 21,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1068
+  }
+ ],
+ "tension": {
+  "current": 0,
+  "longest": 0
+ }
+}

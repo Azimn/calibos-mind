@@ -20,6 +20,7 @@ indefinitely. Quick reference:
     mind status [--raw]              tick, felt need bands (exact floats under --raw), open loops, inbox depth
     mind review [n]                    recent private thoughts
     mind drift [--window N]            persona-drift signals (grown salience share, trigger KL)
+    mind goals                           goal-structure signals: open commitments/expectations, tension span, newly-formed goals
     mind consolidate [--list]          dry-run consolidation scan (read-only); dedup/supersede/flag proposals to journal
     mind consolidate --accept <id>...  accept proposal(s): archive losers with written reasons
     mind consolidate --reject <id> --reason "..."
@@ -57,6 +58,7 @@ PROVENANCE = BASE / "provenance.json"
 EXPECTATIONS = BASE / "expectations.json"
 MOOD = BASE / "mood.json"
 PERSONALITY_DRIFT = BASE / "personality-drift.json"
+GOALS = BASE / "goals.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
@@ -161,6 +163,7 @@ def _init_wipe_targets():
         ("EXPECTATIONS", EXPECTATIONS, False),
         ("MOOD", MOOD, False),
         ("PERSONALITY_DRIFT", PERSONALITY_DRIFT, False),
+        ("GOALS", GOALS, False),
         ("SALIENCE", SALIENCE, False),
         ("INTEROCEPTION", INTEROCEPTION, False),
         ("PROPOSALS", PROPOSALS, True),
@@ -326,6 +329,14 @@ def cmd_init(args):
     # would otherwise brick --force before the wipe ran.
     if PERSONALITY_DRIFT.exists():
         PERSONALITY_DRIFT.unlink()
+    # Goal-structure sidecar (2026-11-10): stale goal-population rows,
+    # formed-goal records, and tension spans must never attach to a
+    # reseeded incarnation's ticks (same bug class as the
+    # salience/familiarity resets above). Wiped BEFORE construction:
+    # the tracker fails loud on a corrupt sidecar, which would
+    # otherwise brick --force before the wipe ran.
+    if GOALS.exists():
+        GOALS.unlink()
     subject = _subject()
     with subject._transaction():
         for text, concept_pair in SEED_MEMORIES:
@@ -401,6 +412,15 @@ def _run_tick(subject):
     # neither can write the sidecar.
     from .personality import ConductDriftTracker
     ptracker = ConductDriftTracker(PERSONALITY_DRIFT)
+    # Goal-structure instrument (domain 17, 2026-11-10): the tracker is
+    # constructed here, before the heartbeat, so a corrupt sidecar fails
+    # loudly before the tick runs (fail-closed, same precedent as
+    # mood/interoception/personality), never silently resets. It is fed
+    # after the tick, below, at the same hook as the conduct-drift feed.
+    # Waking ticks only — _run_tick never serves dream ticks, and
+    # read-only commands never tick, so neither can write the sidecar.
+    from .goals import GoalTracker
+    gtracker = GoalTracker(GOALS)
     # Host-layer feeder (2026-10-08): slow tick-count rhythm of the frozen
     # engine's food/drink events — waking ticks only. Enqueued before the
     # heartbeat so the tick consumes them as external events; the engine's
@@ -415,6 +435,16 @@ def _run_tick(subject):
     # on a recorded tick (no-op write discipline, mirroring familiarity).
     if ptracker.observe(result["tick"], result.get("action")):
         ptracker.save()
+    # Goal-structure feed: snapshot the live goal population for this
+    # waking tick. Every tick records a row, even a zero-open tick (a
+    # zero resets the tension run and is data, not an absence), so the
+    # sidecar saves unconditionally. A commitment or expectation the
+    # inbox sync registers later in this tick is first observed on the
+    # next tick — a one-tick lag inherent to this hook, documented in
+    # goals.py; the sidecar is a per-tick sample, and every goal is
+    # eventually observed.
+    gtracker.observe(subject, result["tick"])
+    gtracker.save()
     # Ambivalence traces (2026-10-01): flush any contested-margin markers
     # the observation wrapper noted during the tick. Flushed HERE, before
     # the habits block below — not after it — because the habits
@@ -1605,6 +1635,61 @@ def cmd_drift(args):
     print(f"  traits: formed habits {formed} | preferences "
           f"authored={prefs['authored']} learned={prefs['learned']} | "
           f"narrative {narrative}")
+    # Goal structure (domain 17, 2026-11-10): open counts, oldest-open
+    # age, tension span — read live at report time plus the sidecar's
+    # history. Read-only: the tracker constructor only reads the
+    # sidecar; this command never writes it.
+    from .goals import GoalTracker, report as goals_report
+    greport = goals_report(subject, GoalTracker(GOALS))
+    gcomms = greport["commitments"]
+    age = (f"{gcomms['oldest_open_age']} ticks"
+           if gcomms["oldest_open_age"] is not None else "—")
+    tension = greport["tension"]
+    print(f"goals: open commitments {gcomms['open']} | oldest open {age} | "
+          f"tension {tension['current']} (longest {tension['longest']}) | "
+          f"open expectations {greport['expectations']['open']}")
+    return 0
+
+
+def cmd_goals(args):
+    """Goal-structure report (Domain 17): the live goal population.
+
+    Read-only: the tracker constructor only reads the sidecar, and
+    report() is a pure read of live state + sidecar. Never writes
+    goals.json — running this command twice returns the same report
+    and leaves the sidecar byte-identical.
+    """
+    from .goals import GoalTracker, report
+    subject = _subject()
+    rep = report(subject, GoalTracker(GOALS))
+    comms = rep["commitments"]
+    by_status = comms["by_status"]
+    age = (f"{comms['oldest_open_age']} ticks"
+           if comms["oldest_open_age"] is not None else "—")
+    due = (", ".join(c[:8] for c in comms["due_soon"])
+           if comms["due_soon"] else "none")
+    exps = rep["expectations"]
+    exp_by = exps["by_status"]
+    tension = rep["tension"]
+    print(f"goals (tick {rep['tick']}, {rep['observed_ticks']} observed ticks) — read-only")
+    print(f"  commitments: open {comms['open']} "
+          f"(open {by_status['open']}, overdue {by_status['overdue']}, "
+          f"kept {by_status['kept']}, broken {by_status['broken']}, "
+          f"released {by_status['released']}) | oldest open {age} | "
+          f"due soon: {due}")
+    print(f"  expectations: open {exps['open']} "
+          f"(pending {exp_by['pending']}, confirmed {exp_by['confirmed']}, "
+          f"violated {exp_by['violated']}, expired {exp_by['expired']})")
+    print(f"  tension: current {tension['current']} tick(s), "
+          f"longest {tension['longest']} tick(s)")
+    if not rep["formed"]:
+        print("  formed goals: none detected")
+    else:
+        print(f"  formed goals ({len(rep['formed'])} detected):")
+        for g in rep["formed"]:
+            print(f"    {g['id'][:8]} [{g['kind']}] actor={g['actor']} "
+                  f"first seen tick {g['first_tick']}: "
+                  f"{g['description'][:80]}")
     return 0
 
 
@@ -1839,6 +1924,9 @@ def main(argv=None):
     p.add_argument("--window", type=int, default=10,
                    help="recent-trigger window size for the KL (default 10)")
     p.set_defaults(func=cmd_drift)
+
+    p = sub.add_parser("goals", help="goal-structure signals: open commitments/expectations, tension span, newly-formed goals")
+    p.set_defaults(func=cmd_goals)
 
     p = sub.add_parser("consolidate",
                        help="dry-run consolidation scan (read-only); proposal journal for dedup/supersede/flags")
