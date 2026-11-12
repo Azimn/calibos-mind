@@ -662,34 +662,18 @@ def _run_tick(subject):
             # side-effect-free (no store writes), and nothing consumes this
             # view except the observe below.
             ws.view()
-        # Persistent-near-miss notes (domain 4, 2026-10-28): a streak
-        # reaching PERSISTENT_NEAR_MISS_THRESHOLD consecutive near-miss
-        # views without admission mints exactly one temporal record
-        # naming the record id and the streak count — never any content
-        # of the target record, which stays unplaced until the 0.5 boost
-        # earns it admission. One note per episode: the sidecar guard
-        # latches here and clears when the streak ends (admission or
-        # pruning in observe() above). Guard-first ordering: the guard
-        # is durable in the sidecar BEFORE any record exists, so a kill
-        # between the save and the mint loses the note (safe direction)
-        # rather than duplicating it; mint_near_miss_note is idempotent
-        # on (record_id, tick) as belt-and-braces. Waking ticks only —
-        # _run_tick never serves dream ticks, and read-only commands
-        # never tick, so neither can mint or touch streak state.
+        # Persistent-near-miss notes REVERTED 2026-11-11 (spec:
+        # research/specs/2026-11-11-revert-persistent-near-miss-note.md):
+        # streaks still accumulate and the 0.5 boost still fires, but no
+        # temporal record is minted at any streak — the 2026-10-28
+        # note-minting path (due_notes / mark_noted / mint_near_miss_note)
+        # is gone. Waking ticks only — _run_tick never serves dream ticks,
+        # and read-only commands never tick, so neither can touch streak
+        # state. Save only when the tracker reports a change (no-op
+        # write discipline).
         changed = ftracker.observe(ws._last_view_ids, ws._last_near_miss_ids)
-        due = ftracker.due_notes()
-        if due:
-            for rid, streak in due:
-                ftracker.mark_noted(rid, streak)
-        if changed or due:
+        if changed:
             ftracker.save()
-        if due:
-            from .familiarity import mint_near_miss_note
-            with subject._transaction():
-                for rid, streak in due:
-                    mint_near_miss_note(subject, {
-                        "record_id": rid, "streak": streak,
-                        "tick": result["tick"]})
     state = subject.inspect()
     new = state["trace"][before:]
     triggers = [t["trigger"]["kind"] for t in new if t["kind"] == "cognition_trigger"]

@@ -1,15 +1,12 @@
-"""Tests for persistent-near-miss notes (domain 4: familiar-but-unplaceable).
+"""Tests for the REVERT of persistent-near-miss notes (domain 4).
 
-Spec: research/specs/2026-10-28-persistent-near-miss-note.md —
-calibos_mind/familiarity.py, wired in cli._run_tick.
+Spec: research/specs/2026-11-11-revert-persistent-near-miss-note.md —
+the 2026-10-28 note-minting path is removed. Streak tracking and the
+0.5 near-miss retrieval boost (2026-09-28 familiarity trace, a kept
+mutation) are unchanged; no temporal record is minted at any streak,
+and the sidecar carries streaks only — no ``noted`` guard.
+
 All fixtures live in /tmp — the live store is never touched.
-
-A familiarity near-miss streak reaching PERSISTENT_NEAR_MISS_THRESHOLD
-(10) consecutive near-miss views without admission mints exactly one
-temporal record (generated_by=cognition) naming the record id and the
-streak count — never any content of the target record. One note per
-episode: admission or pruning clears the sidecar guard, so a later
-streak to 10 may note again.
 
 Ranking control (mirrors tests/test_familiarity.py): every record is
 seeded at tick 0 with zero importance, so activation ties and the stable
@@ -17,22 +14,19 @@ sort keeps insertion order — the test author places the target record
 exactly. The 16 head fillers are then boosted (+5.0 importance, +3.0
 activation at IMPORTANCE_WEIGHT 0.6) so the target's flat 0.5 nudge
 never lifts it above the cut: it near-misses on every waking tick until
-the test says otherwise. The target text carries a unique marker string
-that must never appear in any minted note.
+the test says otherwise.
 
-Subjects are lean (salience + familiarity trackers only): the heartbeat
-still adds a few engine records of its own, and those may legitimately
-near-miss and note in their own episodes — the mechanism notes per
-record, not per tick. Assertions therefore scope to the target record's
-notes (exactly one per episode, never a duplicate), plus a global
-no-duplicate-(record_id, tick) check; they never claim the target is
-the only record that notes.
+The retired canonical note text is detected here with a local regex
+kept ONLY as a detector — the writer/parser/mint functions are deleted
+from the codebase. Any record matching it after the revert is a
+revert-signal failure.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -42,22 +36,23 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import calibos_mind.cli as cli
+import calibos_mind.familiarity as familiarity
 from calibos_mind.familiarity import (
     FAMILIARITY_BOOST,
     FAMILIARITY_THRESHOLD,
-    PERSISTENT_NEAR_MISS_THRESHOLD,
     FamiliarityTracker,
-    is_near_miss_note_text,
-    mint_near_miss_note,
-    near_miss_note_text,
-    parse_near_miss_note_text,
 )
 from calibos_mind.subject import CalibosSubject
 from calibos_mind.provider import InboxCognition
 from digital_subject.cartridge import load_cartridge
 
 
-MARKER = "ZEBRAQUILL-7X9"
+# Retired canonical note text (2026-10-28), kept ONLY as a detector:
+# no record minted after the revert may match it.
+_RETIRED_NOTE_RE = re.compile(
+    r"Something feels familiar but I cannot place it\. "
+    r"That is (\d+) consecutive near-miss views of (\S+), "
+    r"still unplaced, at tick (\d+)\.")
 
 _FILLER_TOPICS = [
     ("thought", "I keep turning over the chess opening I lost last Tuesday."),
@@ -79,13 +74,13 @@ _FILLER_TOPICS = [
 ]
 _T_TARGET = ("memory",
              "The lighthouse keeper's log mentioned a storm I never "
-             f"witnessed. {MARKER} left no other trace.")
+             "witnessed. left no other trace.")
 
 
 # -- fixtures ---------------------------------------------------------------
 
 def _tmp():
-    return Path(tempfile.mkdtemp(prefix="pnm-test-"))
+    return Path(tempfile.mkdtemp(prefix="pnm-revert-test-"))
 
 
 def _make_subject(tmp: Path) -> CalibosSubject:
@@ -139,28 +134,11 @@ def _ticks(subject, n: int):
         cli._run_tick(subject)
 
 
-def _notes(subject):
-    """All persistent-near-miss notes (the anchored parse filters out
-    every other cognition note)."""
+def _retired_notes(subject):
+    """Any record matching the retired note pattern — must be empty
+    after the revert, globally, for every record, not just the target."""
     return [r for r in subject.workspace.records
-            if r.source == "temporal" and r.generated_by == "cognition"
-            and is_near_miss_note_text(r.first_person)]
-
-
-def _notes_for(subject, rid: str):
-    """The target record's notes only — the per-episode assertions scope
-    here, since other records may legitimately note their own episodes."""
-    return [r for r in _notes(subject)
-            if parse_near_miss_note_text(r.first_person)["record_id"] == rid]
-
-
-def _assert_no_duplicate_episodes(subject):
-    """No (record_id, tick) pair notes twice — the mint's idempotency
-    key, checked globally."""
-    keys = [ (parse_near_miss_note_text(r.first_person)["record_id"],
-              parse_near_miss_note_text(r.first_person)["tick"])
-             for r in _notes(subject)]
-    assert len(keys) == len(set(keys)), keys
+            if _RETIRED_NOTE_RE.fullmatch(r.first_person)]
 
 
 def _sidecar(tmp: Path):
@@ -171,16 +149,16 @@ def _streak(tmp: Path, rid: str):
     return _sidecar(tmp)["streaks"].get(rid)
 
 
-def _noted(tmp: Path, rid: str):
-    return _sidecar(tmp)["noted"].get(rid)
+def _assert_sidecar_streaks_only(tmp: Path):
+    """The sidecar carries streaks and nothing else — no ``noted`` key."""
+    assert set(_sidecar(tmp)) == {"streaks"}, _sidecar(tmp)
 
 
 def _patched_cli(tmp: Path):
     """Point the CLI at synthetic paths — the COMPLETE redirect set
     (conftest's lesson: a partial set is how live sidecars get wiped).
-    Routes through the canonical conftest.redirect_all_cli_paths (this
-    helper's hand-maintained copy of the set had already drifted: it
-    omitted MOOD). Returns the saved globals for _restore_cli."""
+    Routes through the canonical conftest.redirect_all_cli_paths.
+    Returns the saved globals for _restore_cli."""
     from conftest import redirect_all_cli_paths
     saved = redirect_all_cli_paths(tmp)
     saved["_subject"] = cli._subject
@@ -205,7 +183,7 @@ def _restore_cli(saved):
         setattr(cli, name, value)
 
 
-# -- fitness 1: streak 9 -> zero notes ----------------------------------------
+# -- fitness: streak 10 / 25 -> zero notes, streaks only ----------------------
 
 def test_streak_nine_mints_no_note():
     tmp = _tmp()
@@ -213,93 +191,61 @@ def test_streak_nine_mints_no_note():
     t = ids["T"]
     _ticks(subject, 9)
     assert _streak(tmp, t) == 9
-    assert _noted(tmp, t) is None
-    assert _notes_for(subject, t) == []
+    assert _retired_notes(subject) == []
+    _assert_sidecar_streaks_only(tmp)
 
 
-# -- fitness 2: streak 10 -> exactly one cognition note, id + streak, no content
-
-def test_streak_ten_mints_exactly_one_note_without_target_content():
+def test_streak_ten_mints_no_note_but_streak_and_boost_hold():
     tmp = _tmp()
     subject, ids = _seed_and_boost(tmp)
     t = ids["T"]
     _ticks(subject, 10)
     assert _streak(tmp, t) == 10
-    notes = _notes_for(subject, t)
-    assert len(notes) == 1, [r.first_person for r in notes]
-    _assert_no_duplicate_episodes(subject)
-    note = notes[0]
-    assert note.source == "temporal"
-    assert note.generated_by == "cognition"
-    # No contractions (regression genome: contraction-negation blindness).
-    assert "n't" not in note.first_person
-    assert "’" not in note.first_person and "‘" not in note.first_person
-    parsed = parse_near_miss_note_text(note.first_person)
-    assert parsed is not None
-    assert parsed["record_id"] == t
-    assert parsed["streak"] == PERSISTENT_NEAR_MISS_THRESHOLD == 10
-    # Content ban, proved by unique marker: the note names the id and the
-    # streak only — none of the target's text may appear in it.
-    assert MARKER not in note.first_person
-    assert "lighthouse" not in note.first_person
-    assert "storm" not in note.first_person
-    # Round-trip: the canonical text is byte-identical from the parse.
-    assert near_miss_note_text(parsed) == note.first_person
-    # The guard latched at the threshold streak.
-    assert _noted(tmp, t) == 10
+    # The kept 2026-09-28 behavior: boost flat 0.5 at the threshold.
+    assert subject.workspace.familiarity_tracker.boost_for(t) == 0.5
+    assert _retired_notes(subject) == []
+    _assert_sidecar_streaks_only(tmp)
 
 
-# -- fitness 3: streak to 25 -> still exactly one note -------------------------
-
-def test_streak_to_twenty_five_mints_no_second_note():
+def test_streak_to_twenty_five_mints_no_note():
     tmp = _tmp()
     subject, ids = _seed_and_boost(tmp)
     t = ids["T"]
     _ticks(subject, 25)
     assert _streak(tmp, t) == 25
-    notes = _notes_for(subject, t)
-    assert len(notes) == 1, [r.first_person for r in notes]
-    assert parse_near_miss_note_text(notes[0].first_person)["streak"] == 10
-    assert _noted(tmp, t) == 10
-    _assert_no_duplicate_episodes(subject)
+    assert _retired_notes(subject) == []
+    _assert_sidecar_streaks_only(tmp)
 
 
-# -- fitness 4: admission ends the episode; a fresh streak notes again --------
+# -- fitness: admission / pruning reset the streak; still no notes -----------
 
-def test_admission_then_restreak_mints_second_note():
+def test_admission_then_restreak_mints_no_note():
     tmp = _tmp()
     subject, ids = _seed_and_boost(tmp)
     t = ids["T"]
     _ticks(subject, 10)
-    assert len(_notes_for(subject, t)) == 1
+    assert _retired_notes(subject) == []
     # Drop the fillers' boost: the target's 0.5 nudge now lifts it above
     # the cut, so the next waking tick admits it.
     _boost_fillers(subject, ids, delta=-5.0)
     _ticks(subject, 1)
     assert t in subject.workspace._last_view_ids, "target must be admitted"
     assert _streak(tmp, t) is None, "admission resets the streak"
-    assert _noted(tmp, t) is None, "admission clears the episode guard"
-    # Re-boost the fillers and streak again: a new episode notes again.
+    # Re-boost the fillers and streak again: a new episode still notes
+    # nothing — minting is gone, not merely guarded.
     _boost_fillers(subject, ids, delta=5.0)
     _ticks(subject, 10)
-    notes = _notes_for(subject, t)
-    assert len(notes) == 2, [r.first_person for r in notes]
-    ticks = sorted(parse_near_miss_note_text(n.first_person)["tick"]
-                   for n in notes)
-    assert ticks[0] < ticks[1], "second note is a later episode"
-    assert all(parse_near_miss_note_text(n.first_person)["streak"] == 10
-               for n in notes)
-    _assert_no_duplicate_episodes(subject)
+    assert _streak(tmp, t) == 10
+    assert _retired_notes(subject) == []
+    _assert_sidecar_streaks_only(tmp)
 
 
-# -- fitness 5: pruning ends the episode; a fresh streak notes again ----------
-
-def test_pruning_then_restreak_mints_second_note():
+def test_pruning_then_restreak_mints_no_note():
     tmp = _tmp()
     subject, ids = _seed_and_boost(tmp)
     t = ids["T"]
     _ticks(subject, 10)
-    assert len(_notes_for(subject, t)) == 1
+    assert _retired_notes(subject) == []
     # Simulate one waking tick in which the target stops competing: it is
     # in neither the admitted nor the near-miss set, so observe() prunes
     # its streak — exactly the input cli._run_tick would pass from such a
@@ -312,18 +258,14 @@ def test_pruning_then_restreak_mints_second_note():
     assert ftracker.observe(admitted, near) is True
     ftracker.save()
     assert _streak(tmp, t) is None, "pruning drops the streak"
-    assert _noted(tmp, t) is None, "pruning clears the episode guard"
-    # The target near-misses again from here: 10 more ticks, second note.
+    # The target near-misses again from here: 10 more ticks, still no note.
     _ticks(subject, 10)
-    notes = _notes_for(subject, t)
-    assert len(notes) == 2, [r.first_person for r in notes]
-    ticks = sorted(parse_near_miss_note_text(n.first_person)["tick"]
-                   for n in notes)
-    assert ticks[0] < ticks[1]
-    _assert_no_duplicate_episodes(subject)
+    assert _streak(tmp, t) == 10
+    assert _retired_notes(subject) == []
+    _assert_sidecar_streaks_only(tmp)
 
 
-# -- fitness 6: read-only sweep + dream ticks mint nothing, sidecar untouched --
+# -- fitness: read-only sweep + dream ticks mint nothing, sidecar untouched ---
 
 def test_readonly_commands_mint_no_note_and_leave_sidecar_identical():
     tmp = _tmp()
@@ -350,7 +292,7 @@ def test_readonly_commands_mint_no_note_and_leave_sidecar_identical():
         # engine's __init__ rewrites the payload row), so the assertion
         # scopes to record count, not file bytes.
         assert len(cli._subject().workspace.records) == before_count
-        assert _notes_for(cli._subject(), t) == []
+        assert _retired_notes(cli._subject()) == []
     finally:
         _restore_cli(saved)
 
@@ -367,20 +309,20 @@ def test_dream_ticks_mint_no_note_and_leave_sidecar_identical():
         subject.dream_tick()
     assert sidecar.read_bytes() == before, \
         "dream ticks must not touch the familiarity sidecar"
-    assert _notes_for(subject, t) == []
+    assert _retired_notes(subject) == []
 
 
-# -- fitness 7: init --force wipes streaks AND guard ----------------------------
+# -- fitness: init --force wipes the sidecar, stale guard included ------------
 
-def test_init_force_wipes_streaks_and_guard_no_recycled_attachment():
+def test_init_force_wipes_sidecar_including_stale_noted_key():
     tmp = _tmp()
     saved = _patched_cli(tmp)
     try:
         cli.cmd_init(argparse.Namespace(force=False))
         subject = cli._subject()
-        # Pre-reseed sidecar: streaks AND guards across the whole id
-        # range a reseed could recycle, so any surviving guard would
-        # suppress the post-reseed target's note.
+        # Pre-reseed sidecar: streaks AND a stale pre-revert "noted"
+        # guard across the whole id range a reseed could recycle, so any
+        # surviving state would attach to recycled ids.
         fam = tmp / "familiarity.json"
         fam.write_text(json.dumps({
             "streaks": {f"experience-{i}": 10 for i in range(1, 61)},
@@ -389,142 +331,114 @@ def test_init_force_wipes_streaks_and_guard_no_recycled_attachment():
         assert fam.exists()
         cli.cmd_init(argparse.Namespace(force=True))
         assert not fam.exists(), \
-            "init --force must delete the familiarity sidecar including the guard"
+            "init --force must delete the familiarity sidecar entirely"
         fresh = cli._subject()
-        assert fresh.workspace.familiarity_tracker.data == \
-            {"streaks": {}, "noted": {}}
+        assert fresh.workspace.familiarity_tracker.data == {"streaks": {}}
         # Post-reseed scenario on the fresh store: a streak to 10 notes
-        # exactly once — no recycled-id guard suppresses it.
+        # nothing — no recycled-id state survives.
         ids = _seed(fresh)
         _boost_fillers(fresh, ids)
         _ticks(fresh, 10)
-        notes = _notes_for(fresh, ids["T"])
-        assert len(notes) == 1, [r.first_person for r in notes]
-        assert parse_near_miss_note_text(notes[0].first_person)["record_id"] \
-            == ids["T"]
+        assert _retired_notes(fresh) == []
+        assert _streak(tmp, ids["T"]) == 10
     finally:
         _restore_cli(saved)
 
 
-# -- fitness 8: byte-identical replay ------------------------------------------
+# -- fitness: stale "noted" key loads cleanly, next save drops it -------------
 
-def test_identical_view_sequences_produce_byte_identical_sidecar_and_notes():
-    def _run():
-        tmp = _tmp()
-        subject, ids = _seed_and_boost(tmp)
-        _ticks(subject, 12)
-        notes = _notes_for(subject, ids["T"])
-        assert len(notes) == 1
-        return ((tmp / "familiarity.json").read_bytes(),
-                notes[0].first_person)
-
-    assert _run() == _run()
-
-
-# -- unit: text/parse/mint, guard semantics ------------------------------------
-
-def test_note_text_parse_round_trip_and_rejections():
-    event = {"record_id": "experience-18", "streak": 10, "tick": 47}
-    text = near_miss_note_text(event)
-    parsed = parse_near_miss_note_text(text)
-    assert parsed == event
-    assert near_miss_note_text(parsed) == text
-    assert not is_near_miss_note_text(text.replace("cannot", "can't"))
-    assert not is_near_miss_note_text(text + " ")
-    assert not is_near_miss_note_text(" " + text)
-    assert not is_near_miss_note_text("just some text")
-    assert not is_near_miss_note_text(None)
-    assert not is_near_miss_note_text(42)
-
-
-def test_mint_is_idempotent_on_record_id_and_tick():
+def test_stale_noted_key_loads_and_next_write_drops_it():
     tmp = _tmp()
-    subject = _make_subject(tmp)
-    event = {"record_id": "experience-18", "streak": 10, "tick": 47}
-    with subject._transaction():
-        first = mint_near_miss_note(subject, event)
-    with subject._transaction():
-        second = mint_near_miss_note(subject, event)
-    assert first == second
-    assert len(_notes(subject)) == 1
-    # A later episode (new tick) mints separately.
-    with subject._transaction():
-        third = mint_near_miss_note(subject, {**event, "tick": 99})
-    assert third != first
-    assert len(_notes(subject)) == 2
+    path = tmp / "familiarity.json"
+    path.write_text(json.dumps({
+        "streaks": {"experience-18": 9},
+        "noted": {"experience-18": 10},
+    }), encoding="utf-8")
+    tracker = FamiliarityTracker(path)
+    # Loads without error; the stale guard never enters memory.
+    assert tracker.data == {"streaks": {"experience-18": 9}}
+    assert not hasattr(tracker, "due_notes")
+    # The next write drops the key: only "streaks" is ever written.
+    tracker.observe(["experience-1"], ["experience-18"])
+    assert tracker.data["streaks"]["experience-18"] == 10
+    tracker.save()
+    assert json.loads(path.read_text(encoding="utf-8")) == \
+        {"streaks": {"experience-18": 10}}
 
 
-def test_old_sidecar_without_guard_loads_cleanly_and_notes():
+def test_old_sidecar_without_noted_loads_cleanly():
     tmp = _tmp()
     path = tmp / "familiarity.json"
     path.write_text(json.dumps({"streaks": {"experience-18": 9}}),
                     encoding="utf-8")
     tracker = FamiliarityTracker(path)
-    assert tracker.data == {"streaks": {"experience-18": 9}, "noted": {}}
-    assert tracker.due_notes() == []
+    assert tracker.data == {"streaks": {"experience-18": 9}}
     tracker.observe(["experience-1"], ["experience-18"])
-    assert tracker.due_notes() == [("experience-18", 10)]
-    tracker.mark_noted("experience-18", 10)
-    assert tracker.due_notes() == []
+    assert tracker.data["streaks"]["experience-18"] == 10
 
 
-def test_guard_clears_on_admission_and_pruning_at_tracker_level():
-    tracker = FamiliarityTracker(_tmp() / "familiarity.json")
-    tracker.data["streaks"]["experience-18"] = 10
-    tracker.mark_noted("experience-18", 10)
-    assert tracker.due_notes() == []
-    # Admission clears streak and guard.
-    assert tracker.observe(["experience-18"], []) is True
-    assert tracker.data == {"streaks": {}, "noted": {}}
-    # Re-streak to the threshold: due again.
-    for _ in range(10):
-        tracker.observe([], ["experience-18"])
-    assert tracker.due_notes() == [("experience-18", 10)]
-    tracker.mark_noted("experience-18", 10)
-    # Pruning clears streak and guard.
-    assert tracker.observe([], []) is True
-    assert tracker.data == {"streaks": {}, "noted": {}}
+# -- fitness: byte-identical replay ------------------------------------------
+
+def test_identical_view_sequences_produce_byte_identical_sidecar():
+    def _run():
+        tmp = _tmp()
+        subject, ids = _seed_and_boost(tmp)
+        _ticks(subject, 12)
+        assert _retired_notes(subject) == []
+        return (tmp / "familiarity.json").read_bytes()
+
+    assert _run() == _run()
 
 
-def test_orphan_guard_never_suppresses_a_fresh_streak():
-    tracker = FamiliarityTracker(_tmp() / "familiarity.json")
-    # Hand-crafted sidecar: guard without a streak (crashed or edited).
-    tracker.data["noted"]["experience-18"] = 10
-    assert tracker.observe([], ["experience-18"]) is True
-    assert tracker.data["noted"] == {}, "orphan guard must self-heal away"
-    for _ in range(9):
-        tracker.observe([], ["experience-18"])
-    assert tracker.due_notes() == [("experience-18", 10)]
-
+# -- unit: boost flat, reset, no note machinery remains -----------------------
 
 def test_boost_unchanged_flat_at_threshold_and_beyond():
     tracker = FamiliarityTracker(_tmp() / "familiarity.json")
-    tracker.data["streaks"]["experience-18"] = 10
+    tracker.data["streaks"]["experience-18"] = 3
     assert tracker.boost_for("experience-18") == FAMILIARITY_BOOST == 0.5
+    tracker.data["streaks"]["experience-18"] = 10
+    assert tracker.boost_for("experience-18") == 0.5
     tracker.data["streaks"]["experience-18"] = 100
     assert tracker.boost_for("experience-18") == 0.5
     assert FAMILIARITY_THRESHOLD == 3
 
 
-def test_reset_wipes_streaks_and_guard():
+def test_reset_wipes_streaks():
     tmp = _tmp()
     tracker = FamiliarityTracker(tmp / "familiarity.json")
     tracker.data["streaks"]["experience-18"] = 10
-    tracker.mark_noted("experience-18", 10)
     tracker.save()
     tracker.reset()
-    assert tracker.data == {"streaks": {}, "noted": {}}
+    assert tracker.data == {"streaks": {}}
     assert json.loads((tmp / "familiarity.json").read_text()) == \
-        {"streaks": {}, "noted": {}}
+        {"streaks": {}}
+
+
+def test_no_note_machinery_remains():
+    """The revert is total: no minting path, guard, or threshold survives
+    in the familiarity module. (Genome: a shadowed or leftover definition
+    is how a reverted mechanism comes back.)"""
+    for name in ("PERSISTENT_NEAR_MISS_THRESHOLD",
+                 "due_notes", "mark_noted",
+                 "near_miss_note_text", "parse_near_miss_note_text",
+                 "is_near_miss_note_text", "mint_near_miss_note"):
+        assert not hasattr(familiarity, name), name
+    assert not hasattr(FamiliarityTracker, "due_notes")
+    assert not hasattr(FamiliarityTracker, "mark_noted")
+    # And the workspace no longer special-cases note text in the
+    # near-miss side-channel.
+    import calibos_mind.workspace as workspace
+    assert not hasattr(workspace, "is_near_miss_note_text")
+    assert "is_near_miss_note_text" not in dir(workspace)
 
 
 def test_cartridge_fingerprint_stable_no_migration_needed():
-    """The mutation touches no cartridge: a fresh subject loads the used
+    """The revert touches no cartridge: a fresh subject loads the used
     store without a fingerprint-migration error."""
     tmp = _tmp()
     subject, ids = _seed_and_boost(tmp)
     _ticks(subject, 12)
-    assert len(_notes_for(subject, ids["T"])) == 1
+    assert _retired_notes(subject) == []
     cart = load_cartridge(cli.CARTRIDGE_PATH)
     import dataclasses
     fingerprint = hashlib.sha256(

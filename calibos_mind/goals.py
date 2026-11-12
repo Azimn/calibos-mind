@@ -78,9 +78,12 @@ Design rules (mirroring personality.py):
   No clock, no RNG, no model calls. (Commitment ids are store input: two
   runs that mint different ids legitimately differ.)
 - Corrupt sidecar fails loud: invalid JSON, a non-dict top level, a
-  malformed ``rows``/``known``/``tension`` section, or a non-integer
-  count raises ValueError at construction. Never silent-delete, never
-  silent-zero. (``cmd_init --force`` wipes the sidecar before
+  malformed ``rows``/``known``/``tension`` section, a non-integer
+  count, or a row whose fields contradict each other (``open`` vs
+  the status counts, ``due_soon`` vs ``open`` and vs the status-
+  ``open`` count, ``oldest_open_age`` vs ``open`` and vs ``tick``,
+  ``open_expectations`` vs pending) raises ValueError at
+  construction. Never silent-delete, never silent-zero. (``cmd_init --force`` wipes the sidecar before
   construction, so a corrupt file can never brick a reseed.)
 - Fail closed on a subject without continuity state: a report that
   silently said "0 commitments" when it could not read the store would
@@ -220,6 +223,11 @@ class GoalTracker:
                     raise ValueError(
                         f"corrupt goals sidecar {self.path}: tension "
                         f"{key!r} is not a non-negative integer")
+            if tension.get("current", 0) > tension.get("longest", 0):
+                raise ValueError(
+                    f"corrupt goals sidecar {self.path}: tension "
+                    f"'current' exceeds 'longest' (observe() maintains "
+                    f"longest = max(longest, current) on every tick)")
             self.data["rows"] = [dict(row) for row in rows]
             self.data["known"] = {cid: dict(entry)
                                   for cid, entry in known.items()}
@@ -236,8 +244,8 @@ class GoalTracker:
 
         if not isinstance(row, dict):
             bad("is not an object")
-        if not _is_int(row.get("tick")):
-            bad("has no integer 'tick'")
+        if not _is_int(row.get("tick")) or row["tick"] < 0:
+            bad("has no non-negative integer 'tick'")
         if not _is_int(row.get("open")) or row["open"] < 0:
             bad("has no non-negative integer 'open'")
         age = row.get("oldest_open_age")
@@ -262,6 +270,37 @@ class GoalTracker:
             value = by_exp.get(status)
             if not _is_int(value) or value < 0:
                 bad(f"has no non-negative integer expectations[{status!r}]")
+        # Cross-field invariants save() always produces (critic round 1):
+        # a row violating any of these is a tampered or half-written
+        # sidecar, not data — fail closed.
+        if row["open"] != by_status["open"] + by_status["overdue"]:
+            bad("'open' does not equal commitments['open'] + "
+                "commitments['overdue']")
+        if row["due_soon"] > row["open"]:
+            bad("'due_soon' exceeds 'open'")
+        if row["open_expectations"] != by_exp["pending"]:
+            bad("'open_expectations' does not equal "
+                "expectations['pending']")
+        # Stricter invariants of the same class (critic round 2):
+        # due_soon counts status "open" commitments ONLY (_live_counts
+        # gates the due-soon bucket on status == "open"), so an
+        # overdue-only row can never carry due_soon; oldest_open_age
+        # is null exactly when no open/overdue commitment exists to
+        # age, and an integer whenever one does.
+        if row["due_soon"] > by_status["open"]:
+            bad("'due_soon' exceeds commitments['open'] (due-soon "
+                "counts status 'open' only)")
+        if row["open"] == 0 and age is not None:
+            bad("'oldest_open_age' is present with zero open "
+                "commitments")
+        if row["open"] >= 1 and age is None:
+            bad("'oldest_open_age' is null with open commitments")
+        # Age is tick - oldest_created and a commitment is never
+        # created at a negative tick, so an age above the observation
+        # tick implies a negative created tick — save() can never
+        # produce it.
+        if age is not None and age > row["tick"]:
+            bad("'oldest_open_age' exceeds 'tick'")
 
     def _validate_known_entry(self, cid, entry) -> None:
         """One known-goal entry: exact shape, or a loud ValueError."""

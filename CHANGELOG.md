@@ -11,6 +11,86 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-11 — REVERT: persistent-near-miss note (domain 4 follow-up, in builder/critic loop)
+
+Spec: `research/specs/2026-11-11-revert-persistent-near-miss-note.md`.
+A revert is a success, not a failure — the loop caught a steady-state
+flood before it became more history.
+
+The evidence (assessment at window close, tick 1072, 1923 records): the
+steady-state revert signal FIRED. 135 near-miss notes minted ticks
+849-1070, all at exactly streak 10, 0 duplicates, 0 notes-about-notes,
+0 below-10 mints — the mechanism worked exactly as specified. But the
+note rate is 57 notes per 100 waking ticks in [872,972] and 56 per 100
+in [972,1072] (56%, 11x the 5% steady-state tripwire), with no decay
+across two consecutive full windows ~220 ticks post-ship: steady state,
+not the seeding transient exempted by the 2026-10-28 adjudication. In
+[972,1072] near-miss notes are 56 of 58 cognition records (97%) and
+22.8% of all 246 new records. The per-record-per-episode design is
+correct; at the mind's record-growth rate it floods the store.
+
+What was removed (`calibos_mind/familiarity.py`,
+`calibos_mind/cli.py`, `calibos_mind/workspace.py`): the note-minting
+call path in `cli._run_tick` (no `due_notes` / `mark_noted` /
+`mint_near_miss_note` call on any path — waking tick, read-only command,
+dream tick), the `noted` per-episode guard from `familiarity.json`, the
+`PERSISTENT_NEAR_MISS_THRESHOLD` constant, and the canonical note-text
+writer/parser/mint helpers (`near_miss_note_text`,
+`parse_near_miss_note_text`, `is_near_miss_note_text`,
+`mint_near_miss_note`). The 2026-10-28 round-2 exclusion of note texts
+from the near-miss side-channel in `workspace.view()` goes with the
+minting path it guarded: notes already minted are ordinary temporal
+records again and may near-miss and boost like any other record, but no
+minting exists for a streak to feed.
+
+What stays, byte-for-byte in behavior: streak accumulation, the
+near-miss retrieval boost (`boost_for == 0.5` at streak >= 3, flat at
+streak 100, 4th-view admission), the designed 3:1 admission rhythm,
+archived/pinned exclusion, determinism, read-only/dream isolation of
+the sidecar, `init --force` wiping the sidecar. No engine edit, no
+cartridge change, no migration.
+
+Stale-`noted` behavior (chosen: ignore on load, drop on next save): a
+sidecar that still carries a `noted` key loads without error — the key
+never enters memory — and the next `save()` writes streaks only, so the
+key is gone after the first post-revert write. The 135 existing
+near-miss notes in the live store stay as history (never deleted;
+consolidation may archive them later) — the revert stops future minting
+only.
+
+Tests: `tests/test_persistent_near_miss_note.py` rewritten to assert
+the opposite of the shipped behavior (15 tests: streak 10 / streak 25
+-> zero notes, sidecar streaks-only; admission/pruning then re-streak
+-> still zero notes; read-only sweep + dream ticks -> zero notes and
+byte-identical sidecar; `init --force` wipes the sidecar including a
+stale `noted` key; stale-`noted` sidecar loads and the next write drops
+the key; byte-identical replay; boost flat at threshold and beyond;
+reset; no note machinery remains; cartridge fingerprint stable).
+`tests/adversarial/test_critic_pnm_r1.py` and
+`tests/adversarial/test_critic_pnm_r2.py` deleted — they exclusively
+asserted the reverted minting mechanism (the r1 global-cap test was
+already retired by the 2026-10-28 adjudication). Full suite: 1032
+passed, 2 failed — both failures pre-existing / unrelated to this
+revert (see below), zero regressions from the revert. No commit (backup
+job handles commits).
+
+Pre-existing failures (NOT touched by this revert, NOT fixed here —
+out of scope, flagging for the design lead): the pristine pre-change
+baseline was 1028 passed, 1 failed —
+`home_sim/tests/test_home_sim.py::TestHardBoundary::test_import_pulls_no_mind_package`
+("home_sim pulled calibos_mind into sys.modules"). It passes in
+isolation (1 passed in 0.07s on the unmodified tree): a test-ordering
+artifact — the full-suite run imports `calibos_mind` before the
+hard-boundary check reads `sys.modules`. The second post-change failure
+is `tests/adversarial/test_critic_goals_r1.py::test_critic_cross_field_row_inconsistency_rejected`
+(a goals-instrument row-validation finding, `goals.py` untouched by
+this revert — `git diff` on `calibos_mind/goals.py` is empty, and the
+test fails deterministically in isolation). That file was written by a
+concurrent critic agent at 08:37 CST, mid-baseline, so the baseline run
+never collected it: test-count arithmetic reconciles exactly (baseline
+1029 collected; post-change 1034 = 1029 - 11 deleted pnm-critic tests
+- 2 net in the rewritten pnm file + 18 goals-critic tests).
+
 ## 2026-11-10 — goal-structure instrument: a number for Domain 17's "Goal structure"
 
 Domain 17's diagnostic checks had no continuous measurement: the
@@ -85,6 +165,80 @@ byte-identical (and no sidecar minted on a fresh store), corrupt
 sidecar variants, fail-closed before the tick advances, `init --force`
 wipe including a corrupt sidecar, determinism on replay, report
 purity, expectation outcome tallies, 100-row cap.
+
+**Critic round 1 fix, 2026-11-11.** The critic's one FAIL:
+`GoalTracker._validate_row` checked row shape only (types,
+non-negative ints, keys present) and never the cross-field
+invariants `save()` always produces, so a tampered or half-written
+row (e.g. `open=5` with every status count 0, `due_soon=3` with
+`open=0`) loaded silently. Fixed in code, not in the test:
+`_validate_row` now also rejects `open != commitments["open"] +
+commitments["overdue"]`, `due_soon > open`, and
+`open_expectations != expectations["pending"]` — all three verified
+against `save()`'s construction, so a genuine file cannot
+false-positive. Builder-side coverage: four cross-field cases added
+to `test_corrupt_sidecar_raises_loud`, plus
+`test_consistent_row_at_cross_field_boundaries_loads` proving a row
+at the boundaries (overdue contributing to `open`, `due_soon ==
+open`) still loads and round-trips. Critic file: 18/18 green;
+full suite 1034 passed, 1 failed — the single failure is the
+pre-existing `home_sim` test-ordering artifact
+(`test_import_pulls_no_mind_package` fails only when run in a
+process that already imported `calibos_mind`; passes in isolation
+and fails identically on the pre-fix tree), unrelated to this fix.
+
+**Critic round 2 fix, 2026-11-11.** The critic's three FAILs, all
+stricter invariants of the same tampered-row class, verified against
+`_live_counts` (the sole row producer) plus a live-observe empirical
+check: (1) `due_soon` counts status `"open"` commitments ONLY, so a
+row with zero status-open commitments and `due_soon=1` satisfies the
+round-1 `due_soon <= open` check (open=1 via an overdue commitment)
+yet `save()` can never produce it; (2) a zero-open row carrying an
+`oldest_open_age` loads, though `save()` writes the age null exactly
+when `open == 0`; (3) a row with open commitments and a null age
+loads, though `save()` always writes an integer age when `open >=
+1`. Fixed in code, not in the tests: `_validate_row` now also
+rejects `due_soon > commitments["open"]`, `oldest_open_age is not
+None` when `open == 0`, and `oldest_open_age is None` when `open >=
+1`. A final re-check of every row field against `_live_counts`
+closed two further same-class holes the same way: an age above the
+observation `tick` implies a negative created tick (a commitment is
+never created before tick 0), and a negative `tick` itself is never
+produced — both now rejected. Builder-side coverage: the three
+round-2 cases plus the two re-check cases added to
+`test_corrupt_sidecar_raises_loud`, and
+`test_overdue_only_row_with_zero_due_soon_loads` proving a genuine
+overdue-only row (open=1, due_soon=0, age present) still loads and
+round-trips, cross-checked field by field against a live `observe()`
+of the same population. Critic files: 18/18 (r1) and 9/9 (r2) green;
+full suite 1061 passed, 1 failed — the single failure is again the
+pre-existing `home_sim` test-ordering artifact (passes in isolation
+on this tree), unrelated to this fix.
+
+**Adjudication fix, 2026-11-11 (design lead).** Critic round 3
+(final round) returned FAIL on one test,
+`test_critic_tension_current_exceeds_longest_rejected`: a sidecar
+with `tension = {"current": 5, "longest": 2}` loaded silently,
+though `observe()` maintains `longest = max(longest, current)` on
+every tick, so `save()` can never produce it — a malformed tension
+section of exactly the fail-closed class rounds 1–2 closed for
+rows, and the spec's corrupt-sidecar clause covers tension
+explicitly. The loop's 3-round budget was exhausted, so the design
+lead adjudicated rather than opening a fourth round: the critic's
+specified two-line check was applied directly in `__init__`'s
+tension validation (`current > longest` now raises the same
+corrupt-sidecar ValueError), and verified with the critic's own
+tests — r1 18/18, r2 9/9, r3 7/7, builder 26/26 (60 passed) —
+plus a full suite run of 1023 passed, 0 failed (`tests/`). The
+round-3 critic also swept `_validate_row` against `_live_counts`
+once more and found every derived row field enforced; two
+confirmed-loadable items were recorded, not failed, as outside the
+row-validation scope (rows with decreasing ticks load — no
+ordering invariant is stated anywhere and no code path rewinds
+`state.tick`; rows with an extra key load and are normalized away
+by `save()` with no mismeasurement). With the adjudication fix
+verified, the instrument SHIPS; registered in the articles
+rotation state as an open mutation, assess_after 2026-11-24.
 
 ## 2026-11-09 — conduct-drift instrument: a number for Domain 16's "No personality drift"
 

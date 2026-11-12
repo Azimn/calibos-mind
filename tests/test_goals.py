@@ -524,6 +524,24 @@ def test_corrupt_sidecar_raises_loud():
         "bad-row-missing-status": json.dumps({"rows": [_row(commitments={"open": 0})], "known": {}, "tension": {}}),
         "bad-row-due-soon": json.dumps({"rows": [_row(due_soon=True)], "known": {}, "tension": {}}),
         "bad-row-expectations": json.dumps({"rows": [_row(expectations={"pending": 0})], "known": {}, "tension": {}}),
+        # Cross-field: save() can never produce these rows, so a row
+        # contradicting itself is a malformed rows section (critic
+        # round 1, 2026-11-11).
+        "bad-row-open-mismatch": json.dumps({"rows": [_row(open=5)], "known": {}, "tension": {}}),
+        "bad-row-due-soon-exceeds-open": json.dumps({"rows": [_row(due_soon=3)], "known": {}, "tension": {}}),
+        "bad-row-open-expectations-mismatch": json.dumps({"rows": [_row(open_expectations=2)], "known": {}, "tension": {}}),
+        "bad-row-due-soon-without-open": json.dumps({"rows": [_row(open=0, due_soon=1, commitments={"open": 0, "overdue": 0, "kept": 1, "broken": 0, "released": 0})], "known": {}, "tension": {}}),
+        # Stricter invariants of the same class (critic round 2,
+        # 2026-11-11): due_soon counts status "open" ONLY, so an
+        # overdue-only row can never carry due_soon; oldest_open_age
+        # is null exactly when open == 0 and an integer when open
+        # >= 1; an age above the observation tick implies a negative
+        # created tick; a negative tick is never produced.
+        "bad-row-due-soon-exceeds-status-open": json.dumps({"rows": [_row(open=1, oldest_open_age=2, tick=1, commitments={"open": 0, "overdue": 1, "kept": 0, "broken": 0, "released": 0}, due_soon=1)], "known": {}, "tension": {}}),
+        "bad-row-age-present-zero-open": json.dumps({"rows": [_row(open=0, oldest_open_age=3, tick=1)], "known": {}, "tension": {}}),
+        "bad-row-age-null-with-open": json.dumps({"rows": [_row(open=1, oldest_open_age=None, tick=1, commitments={"open": 1, "overdue": 0, "kept": 0, "broken": 0, "released": 0})], "known": {}, "tension": {}}),
+        "bad-row-age-exceeds-tick": json.dumps({"rows": [_row(tick=1, open=1, oldest_open_age=5, commitments={"open": 1, "overdue": 0, "kept": 0, "broken": 0, "released": 0})], "known": {}, "tension": {}}),
+        "bad-row-negative-tick": json.dumps({"rows": [_row(tick=-1)], "known": {}, "tension": {}}),
         "bad-known-type": json.dumps({"rows": [], "known": [], "tension": {}}),
         "bad-known-kind": json.dumps({"rows": [], "known": {"x": {"actor": "self", "description": "d", "kind": "formed", "first_tick": 1}}, "tension": {}}),
         "bad-known-tick": json.dumps({"rows": [], "known": {"x": {"actor": "self", "description": "d", "kind": "authored", "first_tick": -1}}, "tension": {}}),
@@ -536,6 +554,71 @@ def test_corrupt_sidecar_raises_loud():
         path.write_text(text, encoding="utf-8")
         with pytest.raises(ValueError, match="corrupt goals"):
             GoalTracker(path)
+
+
+def test_consistent_row_at_cross_field_boundaries_loads():
+    """Positive guard for the cross-field checks (critic round 1):
+    a row exactly at the boundaries — open = open + overdue with an
+    overdue commitment, due_soon == open, open_expectations ==
+    pending — is a row save() can produce and must load, then
+    round-trip byte-identically through save()."""
+    tmp = _tmp()
+    path = tmp / "goals.json"
+    row = _row(tick=4, open=2, oldest_open_age=3,
+               commitments={"open": 1, "overdue": 1, "kept": 1, "broken": 0,
+                            "released": 0},
+               due_soon=1, open_expectations=2,
+               expectations={"pending": 2, "confirmed": 1, "violated": 0,
+                             "expired": 0})
+    # Second row: due_soon exactly equal to open (both open
+    # commitments due soon, none overdue) — the upper boundary.
+    row2 = _row(tick=5, open=2, oldest_open_age=4,
+                commitments={"open": 2, "overdue": 0, "kept": 1, "broken": 0,
+                             "released": 0},
+                due_soon=2, open_expectations=1,
+                expectations={"pending": 1, "confirmed": 2, "violated": 0,
+                              "expired": 0})
+    _write_sidecar(path, rows=[row, row2],
+                   known={"c1": {"actor": "self", "description": "d",
+                                 "kind": "authored", "first_tick": 1}},
+                   tension={"current": 2, "longest": 2})
+    tracker = GoalTracker(path)
+    assert tracker.rows == [row, row2]
+    assert tracker.tension == {"current": 2, "longest": 2}
+    tracker.save()
+    assert GoalTracker(path).rows == [row, row2]
+
+
+def test_overdue_only_row_with_zero_due_soon_loads():
+    """Positive guard for the round-2 stricter checks (critic round
+    2): an overdue-only row is genuine — open counts the overdue
+    commitment, due_soon is 0 (due-soon counts status "open" only),
+    and the age is present — so it must load and round-trip. The
+    same population driven through a real observe() produces exactly
+    this row shape, so the hand-written row is one save() can
+    produce, not a vacuous positive."""
+    tmp = _tmp()
+    path = tmp / "goals.json"
+    row = _row(tick=1, open=1, oldest_open_age=1,
+               commitments={"open": 0, "overdue": 1, "kept": 0, "broken": 0,
+                            "released": 0},
+               due_soon=0, open_expectations=0,
+               expectations={"pending": 0, "confirmed": 0, "violated": 0,
+                             "expired": 0})
+    _write_sidecar(path, rows=[row])
+    tracker = GoalTracker(path)
+    assert tracker.rows == [row]
+    tracker.save()
+    assert GoalTracker(path).rows == [row]
+    # Live cross-check: the same population through observe().
+    subject = _init_store()
+    _add_commitment(subject, "self", "past due", due_tick=0,
+                    commitment_id="bnd-overdue")
+    _tick(subject)  # tick 1: flips to overdue.
+    live_row = _sidecar_data(cli.GOALS)["rows"][0]
+    assert live_row == row, (live_row, row)
+    # And the live-written file reloads.
+    assert GoalTracker(cli.GOALS).rows == [row]
 
 
 def test_corrupt_sidecar_fails_closed_before_tick_advances():
