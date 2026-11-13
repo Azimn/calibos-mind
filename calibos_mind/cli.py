@@ -9,6 +9,18 @@ indefinitely. Quick reference:
     mind inbox                         list cognition prompts waiting for me
     mind answer <id> "thought"         think the thought (through the inner ear)
     mind answer <id> --silent          let that one pass
+    mind defer <id> --bucket NAME [--urgency low|high]
+                                     set a prompt aside instead of answering
+                                     it now: named bucket, revisit time, and
+                                     a reminder commitment to come back
+    mind revisit [BUCKET]              the revisit ritual: a random thought
+                                     plus a remembering pass over a bucket
+    mind settle <id> --answered|--released [--note TEXT]
+                                     close a deferred item, with a record
+    mind buckets                       list deferral buckets and their items
+    mind bucket add|rename|set|remove ...  manage deferral buckets
+                                     (the mind's own categories, chosen
+                                     by the inhabitant; --reason records why)
     mind think "thought"               think voluntarily, no prompt needed
     mind remember "fact"             merger write path: keep a durable chat learning
                                      as a first-class chat-learned memory (+provenance)
@@ -59,6 +71,7 @@ EXPECTATIONS = BASE / "expectations.json"
 MOOD = BASE / "mood.json"
 PERSONALITY_DRIFT = BASE / "personality-drift.json"
 GOALS = BASE / "goals.json"
+DEFERRALS = BASE / "deferrals.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
 CARTRIDGE_PATH = BASE / "calibos.toml"
@@ -164,6 +177,7 @@ def _init_wipe_targets():
         ("MOOD", MOOD, False),
         ("PERSONALITY_DRIFT", PERSONALITY_DRIFT, False),
         ("GOALS", GOALS, False),
+        ("DEFERRALS", DEFERRALS, False),
         ("SALIENCE", SALIENCE, False),
         ("INTEROCEPTION", INTEROCEPTION, False),
         ("PROPOSALS", PROPOSALS, True),
@@ -337,6 +351,14 @@ def cmd_init(args):
     # otherwise brick --force before the wipe ran.
     if GOALS.exists():
         GOALS.unlink()
+    # Deferral-bucket sidecar (2026-11-12): stale buckets, deferred
+    # items, and release records must never attach to a reseeded
+    # incarnation's ticks (same bug class as the
+    # salience/familiarity resets above). Wiped BEFORE construction:
+    # the tracker fails loud on a corrupt sidecar, which would
+    # otherwise brick --force before the wipe ran.
+    if DEFERRALS.exists():
+        DEFERRALS.unlink()
     subject = _subject()
     with subject._transaction():
         for text, concept_pair in SEED_MEMORIES:
@@ -1677,6 +1699,401 @@ def cmd_goals(args):
     return 0
 
 
+# -- prompt deferral (Domain 19, 2026-11-12) -------------------------------
+# The waker contract's third option: answer / pass / defer. A defer
+# places a prompt in a named bucket with a revisit time and a reminder
+# commitment to come back. See calibos_mind/deferrals.py for the
+# sidecar, the gate, and the ritual; this section is the CLI wiring.
+
+def _deferral_tracker():
+    """Load the deferral sidecar (fail loud on a corrupt file).
+
+    A corrupt sidecar raises ValueError from the constructor — that is
+    the fail-closed path, never a silent reset. User-input errors
+    (unknown bucket, refused gate) are caught by the commands below
+    and reported cleanly instead.
+    """
+    from .deferrals import DeferralTracker
+    return DeferralTracker(DEFERRALS)
+
+
+def _deferral_weariness(subject) -> float:
+    """Current weariness: body + open load, one number.
+
+    The body term is the existing friction machinery on the engine's
+    needs; the load term counts open commitments, pending
+    expectations, and prompts waiting in the inbox. Computed live at
+    defer time, never stored.
+    """
+    from .deferrals import weariness
+    state = subject.inspect()["continuity"]
+    open_comms = sum(1 for c in state["commitments"].values()
+                     if c["status"] in {"open", "overdue"})
+    open_exps = sum(1 for e in state["expectations"].values()
+                    if e["status"] == "pending")
+    inbox_n = len(list(INBOX.glob("prompt-*.json")))
+    return weariness(dict(subject.engine.state.needs),
+                     open_comms, open_exps, inbox_n)
+
+
+def _resolve_reminder(subject, reminder_id, *, released, outcome, tick):
+    """Settle a deferral reminder commitment, if it is still open.
+
+    A reminder whose commitment is already closed (or never existed)
+    is a no-op: settling must never break the deferral it belongs
+    to. The caller owns the outcome wording.
+    """
+    item = subject.continuity.state.commitments.get(reminder_id)
+    if item is None or item.status not in {"open", "overdue"}:
+        return None
+    with subject._transaction():
+        item = subject.continuity.state.commitments.get(reminder_id)
+        if item is None or item.status not in {"open", "overdue"}:
+            return None
+        if released:
+            subject.release_commitment(reminder_id, outcome=outcome,
+                                       tick=tick)
+        else:
+            subject.continuity.resolve_commitment(
+                reminder_id, outcome=outcome, kept=True, tick=tick)
+    return item
+
+
+def _mint_reminder(subject, prompt_id, bucket_name, defer_count,
+                   revisit_tick, priority, tick):
+    """Mint the reminder commitment for one deferral.
+
+    Actor "self", due at the revisit tick, description naming the
+    item, the bucket, and the revisit time — the commitment IS the
+    reminder record. The caller owns the transaction.
+    """
+    return subject.continuity.create_commitment(
+        "self",
+        f"revisit deferred {prompt_id} in bucket '{bucket_name}' at "
+        f"tick {revisit_tick} (defer #{defer_count})",
+        tick=tick, due_tick=revisit_tick, importance=priority)
+
+
+def cmd_defer(args):
+    """Defer a queued prompt into a bucket (or re-defer a parked item).
+
+    The id names either a prompt waiting in the inbox (first defer:
+    consumed here, like `mind answer`) or an already-deferred item
+    (re-defer: count increments, revisit redrawn, priority recomputed).
+    The gate is checked BEFORE consuming: a refused defer leaves the
+    prompt untouched. High urgency is never deferred on weariness
+    alone. On success exactly one reminder commitment is minted and
+    the inbox expectation (first defer only) is settled as "deferred".
+    """
+    from .deferrals import DeferralRefused, priority_for
+    from .provider import InboxCognition, StalePromptError, check_prompt_fresh
+    pid = _normalize_prompt_id(args.id)
+    tracker = _deferral_tracker()
+    if args.bucket not in tracker.buckets:
+        print(f"defer: no bucket {args.bucket!r} (mind buckets to list).")
+        return 1
+    subject = _subject()
+    now = subject.engine.state.tick
+    existing = tracker.items.get(pid)
+    if existing is not None \
+            and existing["status"] in ("answered", "released"):
+        # Closed is terminal: refuse before consuming or minting
+        # anything, so no reminder is minted for a dead deferral.
+        # (tracker.defer() enforces the same rule as a backstop.)
+        print(f"{pid}: already {existing['status']} — closed items are "
+              f"terminal; nothing deferred.")
+        return 1
+    before_count = 0 if existing is None else existing["defer_count"]
+    w = _deferral_weariness(subject)
+    try:
+        allowed, reason, _gate = tracker.decide(
+            bucket_name=args.bucket, urgency=args.urgency,
+            weariness_value=w, defer_count=before_count, now_tick=now)
+    except ValueError as exc:
+        print(f"defer: {exc}")
+        return 1
+    if not allowed:
+        print(f"{pid}: defer refused — {reason}. Prompt kept.")
+        return 1
+    payload = None
+    if existing is None:
+        provider = InboxCognition(INBOX)
+        try:
+            payload = provider.consume(pid)
+        except ValueError as exc:
+            print(f"{pid}: {exc}; nothing consumed.")
+            return 1
+        try:
+            check_prompt_fresh(payload, subject.workspace.sequence,
+                               subject.workspace.records)
+        except StalePromptError as exc:
+            from .inbox_expectations import resolve
+            resolve(subject, pid, outcome="refused-stale-view")
+            print(f"{pid}: refused — {exc}; prompt discarded.")
+            return 1
+        text = payload.get("prompt") or ""
+        if not text and payload.get("experiences"):
+            text = payload["experiences"][0].get("first_person", "")
+        if not text:
+            text = pid
+    else:
+        text = existing["text"]
+    defer_count = before_count + 1
+    revisit_tick = tracker.plan_revisit_tick(
+        args.bucket, pid, defer_count, now)
+    priority = priority_for(tracker.buckets[args.bucket], defer_count)
+    old_reminder = tracker.previous_reminder(pid)
+    with subject._transaction():
+        reminder = _mint_reminder(subject, pid, args.bucket, defer_count,
+                                  revisit_tick, priority, now)
+    try:
+        item = tracker.defer(pid, args.bucket, text, args.urgency,
+                             w, now, reminder.id)
+    except DeferralRefused as exc:
+        # The pre-check above uses identical inputs, so this cannot
+        # fire on a live decision — but if it ever did, the minted
+        # reminder must not be left orphaned: release it rather than
+        # leaving a commitment the sidecar never recorded.
+        _resolve_reminder(subject, reminder.id, released=True,
+                          outcome=f"defer refused after mint: {exc}",
+                          tick=now)
+        print(f"{pid}: {exc}; nothing deferred.")
+        return 1
+    tracker.save()
+    if old_reminder is not None:
+        _resolve_reminder(subject, old_reminder, released=False,
+                          outcome=f"re-deferred to tick {revisit_tick}",
+                          tick=now)
+    if payload is not None:
+        from .inbox_expectations import resolve
+        resolve(subject, pid, outcome="deferred")
+        # A person-attributed prompt set aside is still contact with
+        # a person (same rule as the let-pass path): register the
+        # genuine message-kind event, fail closed.
+        _register_person_contact(subject, payload)
+    print(f"{pid}: deferred to {args.bucket} (#{item['defer_count']}), "
+          f"revisit tick {item['revisit_tick']}; "
+          f"reminder {reminder.id[:8]}.")
+    return 0
+
+
+def cmd_revisit(args):
+    """The revisit ritual: a random thought + a remembering pass.
+
+    Scans the bucket (or all buckets) for items past their revisit
+    window — folding them into the forgotten counts exactly once —
+    then surfaces one item drawn at random as the thought to consider
+    now, plus the full contents for the remembering pass. Presents
+    only: nothing is answered, released, or minted here.
+    """
+    tracker = _deferral_tracker()
+    if args.bucket is not None and args.bucket not in tracker.buckets:
+        print(f"revisit: no bucket {args.bucket!r} (mind buckets to list).")
+        return 1
+    subject = _subject()
+    now = subject.engine.state.tick
+    report = tracker.revisit(now, args.bucket)
+    if any(b["newly_overdue"] for b in report["buckets"].values()):
+        tracker.save()
+    for name, bucket in report["buckets"].items():
+        print(f"== {name} (forgotten: {bucket['forgotten']}) ==")
+        for item in bucket["newly_overdue"]:
+            print(f"  overdue: {item['prompt_id']} (revisit tick "
+                  f"{item['revisit_tick']}, deferred "
+                  f"#{item['defer_count']}) — counted as forgotten")
+        thought = bucket["random_thought"]
+        if thought is not None:
+            print(f"  random thought: [{thought['prompt_id']}] "
+                  f"{thought['text'][:160]} (deferred "
+                  f"#{thought['defer_count']}, revisit tick "
+                  f"{thought['revisit_tick']})")
+        if bucket["items"]:
+            print("  remembering:")
+            for item in bucket["items"]:
+                print(f"    [{item['status']}] {item['prompt_id']}: "
+                      f"{item['text'][:80]} (#{item['defer_count']}, "
+                      f"revisit tick {item['revisit_tick']})")
+        else:
+            print("  remembering: nothing deferred here.")
+    return 0
+
+
+def cmd_settle(args):
+    """Close a deferred item as answered or released, with a record.
+
+    The reminder commitment is settled alongside: kept with the
+    answer outcome, or released. The item stays in the sidecar as a
+    closed record — closing is never deletion.
+    """
+    tracker = _deferral_tracker()
+    pid = _normalize_prompt_id(args.id)
+    item = tracker.items.get(pid)
+    if item is None:
+        print(f"settle: no deferred item {pid!r}.")
+        return 1
+    if item["status"] in ("answered", "released"):
+        print(f"settle: {pid} is already {item['status']}.")
+        return 1
+    action = "answered" if args.answered else "released"
+    subject = _subject()
+    now = subject.engine.state.tick
+    note = (args.note or "").strip()
+    try:
+        closed = tracker.settle(pid, action, now, note=note)
+    except ValueError as exc:
+        print(f"settle: {exc}")
+        return 1
+    tracker.save()
+    reminder_id = item["reminder_id"]
+    if reminder_id is not None:
+        outcome = f"{action} at revisit (tick {now})"
+        if note:
+            outcome += f": {note}"
+        _resolve_reminder(subject, reminder_id,
+                          released=(action == "released"),
+                          outcome=outcome, tick=now)
+    print(f"{pid}: settled as {closed['status']}"
+          + (f" — {note}" if note else "."))
+    return 0
+
+
+def cmd_buckets(args):
+    """List deferral buckets, their config, and their open items.
+
+    Read-only: the tracker constructor only reads the sidecar, and
+    this command never writes it.
+    """
+    tracker = _deferral_tracker()
+    buckets = tracker.buckets
+    items = tracker.items
+    if not buckets:
+        print("no buckets — deferral has nowhere to put things.")
+        return 0
+    for name, cfg in sorted(buckets.items()):
+        mine = [i for i in items.values() if i["bucket"] == name]
+        open_n = sum(1 for i in mine
+                     if i["status"] in ("deferred", "overdue"))
+        lo, hi = cfg["revisit_window"]
+        print(f"== {name}: gate {cfg['gate']:.2f}, revisit {lo}-{hi}h, "
+              f"escalation after {cfg['escalation_threshold']} "
+              f"(+{cfg['escalation_step']:.2f}), "
+              f"forgotten {cfg['forgotten']}, {open_n} open item(s)")
+        for item in sorted(mine, key=lambda i: i["revisit_tick"]):
+            print(f"  [{item['status']}] {item['prompt_id']}: "
+                  f"{item['text'][:80]} (#{item['defer_count']}, "
+                  f"revisit tick {item['revisit_tick']})")
+    decisions = tracker.decisions
+    if decisions:
+        print("  category decisions (the mind's own):")
+        for dec in decisions[-5:]:
+            print(f"    tick {dec['tick']} {dec['action']} "
+                  f"{dec['bucket']}: {dec['detail']}"
+                  + (f" — {dec['reason']}" if dec["reason"] else ""))
+    return 0
+
+
+def _bucket_config_overrides(args) -> dict:
+    """Config flags from a `mind bucket` invocation, parsed.
+
+    --window takes "MIN,MAX" hours. Unknown/malformed values raise
+    ValueError, reported cleanly by the caller.
+    """
+    overrides = {}
+    if getattr(args, "gate", None) is not None:
+        overrides["gate"] = args.gate
+    if getattr(args, "window", None) is not None:
+        parts = args.window.split(",")
+        if len(parts) != 2:
+            raise ValueError("--window takes MIN,MAX hours "
+                             f"(got {args.window!r})")
+        try:
+            overrides["revisit_window"] = [float(parts[0]),
+                                           float(parts[1])]
+        except ValueError:
+            raise ValueError("--window takes MIN,MAX hours "
+                             f"(got {args.window!r})") from None
+    if getattr(args, "escalation_threshold", None) is not None:
+        overrides["escalation_threshold"] = args.escalation_threshold
+    if getattr(args, "escalation_step", None) is not None:
+        overrides["escalation_step"] = args.escalation_step
+    if getattr(args, "forgotten_penalty", None) is not None:
+        overrides["forgotten_penalty"] = args.forgotten_penalty
+    if getattr(args, "forgotten_penalty_cap", None) is not None:
+        overrides["forgotten_penalty_cap"] = args.forgotten_penalty_cap
+    return overrides
+
+
+def cmd_bucket(args):
+    """Manage deferral buckets: add, rename, set, remove.
+
+    These are the mind's own categories: the inhabitant chooses,
+    adds, renames, and removes buckets as it sees fit; suggestions
+    arrive in conversation, never as prescription. Every change is
+    recorded in the sidecar's decision log as the mind's own
+    decision, with its reason (--reason).
+
+    Removing a bucket never silently drops its contents: with --to
+    the items move to another bucket; without it they are released,
+    each with a written entry in the release log, and their reminder
+    commitments are released alongside.
+    """
+    tracker = _deferral_tracker()
+    subject = _subject()
+    now = subject.engine.state.tick
+    reason = (args.reason or "").strip()
+    try:
+        if args.action == "add":
+            cfg = tracker.add_bucket(
+                args.name, now, reason, **_bucket_config_overrides(args))
+            tracker.save()
+            lo, hi = cfg["revisit_window"]
+            print(f"bucket {args.name!r} added: gate {cfg['gate']:.2f}, "
+                  f"revisit {lo}-{hi}h, escalation after "
+                  f"{cfg['escalation_threshold']}."
+                  + (f" Reason: {reason}" if reason else ""))
+        elif args.action == "rename":
+            tracker.rename_bucket(args.name, args.new, now, reason)
+            tracker.save()
+            print(f"bucket {args.name!r} renamed to {args.new!r}."
+                  + (f" Reason: {reason}" if reason else ""))
+        elif args.action == "set":
+            cfg = tracker.set_bucket(
+                args.name, now, reason, **_bucket_config_overrides(args))
+            tracker.save()
+            lo, hi = cfg["revisit_window"]
+            print(f"bucket {args.name!r}: gate {cfg['gate']:.2f}, "
+                  f"revisit {lo}-{hi}h, escalation after "
+                  f"{cfg['escalation_threshold']}, forgotten "
+                  f"{cfg['forgotten']}."
+                  + (f" Reason: {reason}" if reason else ""))
+        elif args.action == "remove":
+            affected = tracker.remove_bucket(
+                args.name, now, reassign_to=args.to, reason=reason)
+            tracker.save()
+            for item in affected:
+                if item["status"] == "released" \
+                        and item["reminder_id"] is not None:
+                    _resolve_reminder(
+                        subject, item["reminder_id"], released=True,
+                        outcome=f"bucket {args.name!r} removed; deferred "
+                                f"item released",
+                        tick=now)
+            if args.to is not None:
+                print(f"bucket {args.name!r} removed; {len(affected)} "
+                      f"item(s) moved to {args.to!r}.")
+            else:
+                print(f"bucket {args.name!r} removed; {len(affected)} "
+                      f"item(s) released with a written record.")
+        else:  # argparse enforces the action set; unreachable.
+            print(f"bucket: unknown action {args.action!r}")
+            return 1
+    except ValueError as exc:
+        print(f"bucket: {exc}")
+        return 1
+    return 0
+
+
+
 def _proposal_line(p):
     head = (f"#{p['id']} [{p['kind']}] {p['a']} / {p['b']} "
             f"(confidence {p['confidence']:.3f}, proposed @ tick {p['created_tick']})")
@@ -1911,6 +2328,87 @@ def main(argv=None):
 
     p = sub.add_parser("goals", help="goal-structure signals: open commitments/expectations, tension span, newly-formed goals")
     p.set_defaults(func=cmd_goals)
+
+    p = sub.add_parser("defer", help="set a queued prompt aside into a "
+                                     "bucket instead of answering it now "
+                                     "(or re-defer a parked item)")
+    p.add_argument("id", help="prompt id (or an already-deferred item id)")
+    p.add_argument("--bucket", required=True,
+                   help="bucket to defer into (mind buckets to list)")
+    p.add_argument("--urgency", choices=["low", "high"], default="low",
+                   help="high urgency is never deferred on weariness alone "
+                        "(default: low)")
+    p.set_defaults(func=cmd_defer)
+
+    p = sub.add_parser("revisit", help="the revisit ritual: a random "
+                                       "thought plus a remembering pass "
+                                       "over a bucket")
+    p.add_argument("bucket", nargs="?", default=None,
+                   help="bucket to revisit (default: all buckets)")
+    p.set_defaults(func=cmd_revisit)
+
+    p = sub.add_parser("settle", help="close a deferred item as answered "
+                                      "or released, with a record")
+    p.add_argument("id", help="deferred item id")
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument("--answered", action="store_true",
+                       help="the item was answered at revisit")
+    group.add_argument("--released", action="store_true",
+                       help="the item was deliberately released")
+    p.add_argument("--note", default="",
+                   help="outcome note for the record")
+    p.set_defaults(func=cmd_settle)
+
+    p = sub.add_parser("buckets", help="list deferral buckets, their "
+                                       "config, and their open items")
+    p.set_defaults(func=cmd_buckets)
+
+    p = sub.add_parser("bucket", help="manage deferral buckets — the "
+                                       "mind's own categories, chosen by "
+                                       "the inhabitant")
+    bsub = p.add_subparsers(dest="action", required=True)
+    bp = bsub.add_parser("add", help="add a bucket")
+    bp.add_argument("name")
+    bp.add_argument("--reason", default="",
+                    help="the mind's own reason for adding it")
+    bp.add_argument("--gate", type=float, default=None,
+                    help="weariness threshold for deferral into this bucket "
+                         "(0-1)")
+    bp.add_argument("--window", default=None, metavar="MIN,MAX",
+                    help="revisit window in hours, e.g. 4,24")
+    bp.add_argument("--escalation-threshold", type=int, default=None,
+                    help="defers past this count escalate (default 3)")
+    bp.add_argument("--escalation-step", type=float, default=None,
+                    help="gate/priority step per defer past threshold")
+    bp.add_argument("--forgotten-penalty", type=float, default=None,
+                    help="gate increase per forgotten item in the bucket")
+    bp.add_argument("--forgotten-penalty-cap", type=float, default=None,
+                    help="cap on the total forgotten-item gate increase")
+    bp = bsub.add_parser("rename", help="rename a bucket (items move with it)")
+    bp.add_argument("name")
+    bp.add_argument("new")
+    bp.add_argument("--reason", default="",
+                    help="the mind's own reason for renaming it")
+    bp = bsub.add_parser("set", help="reconfigure a bucket")
+    bp.add_argument("name")
+    bp.add_argument("--reason", default="",
+                    help="the mind's own reason for reconfiguring it")
+    bp.add_argument("--gate", type=float, default=None)
+    bp.add_argument("--window", default=None, metavar="MIN,MAX")
+    bp.add_argument("--escalation-threshold", type=int, default=None)
+    bp.add_argument("--escalation-step", type=float, default=None)
+    bp.add_argument("--forgotten-penalty", type=float, default=None)
+    bp.add_argument("--forgotten-penalty-cap", type=float, default=None)
+    bp = bsub.add_parser("remove", help="remove a bucket (contents move "
+                                        "with --to, or are released with a "
+                                        "written record)")
+    bp.add_argument("name")
+    bp.add_argument("--to", default=None, metavar="BUCKET",
+                    help="reassign contents to this bucket instead of "
+                         "releasing them")
+    bp.add_argument("--reason", default="",
+                    help="the mind's own reason for removing it")
+    p.set_defaults(func=cmd_bucket)
 
     p = sub.add_parser("consolidate",
                        help="dry-run consolidation scan (read-only); proposal journal for dedup/supersede/flags")

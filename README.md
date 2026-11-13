@@ -28,6 +28,18 @@ always a valid answer.
                                      # machinery can observe real people (never inferred from text)
     ./mind answer <id> "thought"     # think it (through the inner ear)
     ./mind answer <id> --silent      # let it pass
+    ./mind defer <id> --bucket NAME [--urgency low|high]
+                                     # set a prompt aside into a bucket
+                                     # (weariness-gated; mints a reminder
+                                     # to revisit at a jittered time)
+    ./mind revisit [BUCKET]          # revisit ritual: a random thought
+                                     # plus a remembering pass over a bucket
+    ./mind settle <id> --answered|--released [--note TEXT]
+                                     # close a deferred item, with a record
+    ./mind buckets                   # list deferral buckets and open items
+    ./mind bucket add|rename|set|remove ...
+                                     # the mind's own categories, chosen by
+                                     # the inhabitant (--reason records why)
     ./mind think "thought"           # voluntary thought, no prompt needed
     ./mind dream [--ticks N]        # sleep: dream ticks, no outside world; body/tick/conduct frozen, fragments logged not thought
     ./mind recall [n]               # review recent dream fragments

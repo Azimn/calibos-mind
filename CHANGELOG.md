@@ -11,6 +11,98 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-12 — Weariness-gated prompt deferral with categorized buckets (Domain 19 Agency, in builder/critic loop)
+
+Round 3 (critic FAIL round 2, one defect fixed in code, tests unchanged):
+- F3 — Missing sidecar sections loaded silently (genome: silent zero on
+  missing sections, 2026-09-24). `DeferralTracker.__init__` used
+  `loaded.get("buckets", {})` (and the same for items, releases,
+  decisions), so a sidecar missing any one of the four keys loaded with
+  zero buckets / zero items / an empty release-decision record. The
+  writer (`save()`) always writes all four keys, so a missing section
+  is malformed, not empty. Now the constructor raises ValueError
+  ("corrupt deferrals sidecar ... missing '<key>' section") when any of
+  the four top-level keys is absent. Present-but-empty sections still
+  load clean. This keeps the module docstring's promise that a
+  malformed bucket/item/release section raises ValueError.
+
+Round 2 (critic FAIL round 1, two defects fixed in code, tests unchanged):
+- F1 — Closed is terminal. `DeferralTracker.defer()` refused nothing on a
+  settled item, so an answered/released item resurrected as `deferred`
+  with a fresh reminder. Now `defer()` raises DeferralRefused ("already
+  answered/released") before the gate is consulted, and `cmd_defer`
+  refuses before consuming or minting, so no reminder is minted for a
+  dead deferral.
+- F2 — Forgotten-item feedback survived a bucket move. A moved overdue
+  item counted against neither bucket (`_overdue_now` counts only
+  `deferred` items; the old bucket's recorded count died with it).
+  Now `remove_bucket --to` carries each moved overdue item into the
+  destination bucket's `forgotten` count, with a history note. Exactly
+  once: "overdue" exists only after a scan fold, and the live count
+  excludes overdue items, so it is never double-counted.
+
+Spec: `research/specs/2026-11-12-deferral-buckets.md` (approved by Jay
+2026-11-12; Buckets section amended the same day per his clarification).
+Addresses the domain's absent checks (6) no refusal on internal
+priorities and (7) no postponement. Assess after 2026-11-26.
+
+The waker contract gains a third option: answer / pass / defer. `mind
+defer <id> --bucket NAME [--urgency low|high]` sets a queued prompt
+aside into a named bucket with a revisit time and a reminder, or
+re-defers an already-parked item (count increments, revisit redrawn,
+priority recomputed, old reminder settled as kept "re-deferred").
+`mind revisit [BUCKET]` is the revisit ritual: a random thought drawn
+from the bucket plus a remembering pass over its contents. `mind settle
+<id> --answered|--released` closes a deferred item with a record.
+`mind buckets` lists buckets, config, and open items; `mind bucket
+add|rename|set|remove` manages them.
+
+- Buckets: named categories, not one pile. Starting defaults `work`
+  and `personal`, each with its own gate (work 0.55, personal 0.70),
+  revisit window (4-24h), escalation, and forgotten-item penalty.
+  Categories are the mind's own decision (Jay, 2026-11-12): the
+  inhabitant chooses, adds, renames, and removes buckets as it sees
+  fit; Jay may suggest, never prescribe. Config lives in the mind's
+  own sidecar, never the cartridge or a parent setting; every
+  category change is recorded in the sidecar's decision log as the
+  mind's own decision, with its reason (`--reason`). Someday there
+  may be a macrame bucket.
+- Weariness reuses the existing friction machinery (body focus/fatigue)
+  and takes the larger of that and a load term (open commitments +
+  pending expectations + inbox depth, saturating at 10). One
+  weariness, composed — not a second one invented.
+- Revisit times are times, not "next wake": drawn randomly inside the
+  bucket's window, converted at 1 tick = 2 hours of lived time
+  (anchored to the wake cadence, 3 heartbeat ticks per 6-hour wake).
+  The draw is seeded from recorded state, so identical sequences
+  produce byte-identical sidecars.
+- Anti-never-done, all three as specified: (1) every defer mints
+  exactly one reminder commitment (actor self, due at the revisit
+  tick, description naming item, bucket, revisit time); a defer with
+  no reminder is refused, not recorded. (2) Past the escalation
+  threshold (default 3) the item's priority rises and the gate gets
+  stricter. (3) Forgotten-item feedback per bucket: items past their
+  revisit window unactioned raise the bucket's gate, counted live at
+  decision time and folded into the bucket's `forgotten` total by the
+  revisit scan, exactly once per item.
+- Removal never silently drops anything: with `--to` open items move
+  (closed items keep their verdict and move too, or keep the old
+  bucket name as history without one); without it open items are
+  released with a written entry in the release log and their reminder
+  commitments released. A bucket removal never re-closes a closed
+  item (caught by a test, not by the critic — the first draft did).
+- Isolation: read-only commands and dream ticks never touch
+  `deferrals.json`; `mind init --force` wipes it, including corrupt
+  copies; a corrupt sidecar fails loud. New sidecar `deferrals.json`
+  added to cli.py, conftest REDIRECTED, and the init wipe set.
+
+New tests: tests/test_deferrals.py, 19 tests covering every fitness
+clause (third option + exactly-one reminder, gate refusal keeping the
+prompt, high urgency never deferred, escalation, forgotten feedback,
+jitter inside the window and varied, ritual surfacing, bucket ops with
+decision log, settle, read-only/dream isolation, init wipe + orphan
+refusal, corruption, determinism).
+
 ## 2026-11-11 — REVERT: persistent-near-miss note (domain 4 follow-up, in builder/critic loop)
 
 Spec: `research/specs/2026-11-11-revert-persistent-near-miss-note.md`.
