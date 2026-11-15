@@ -33,6 +33,7 @@ indefinitely. Quick reference:
     mind review [n]                    recent private thoughts
     mind drift [--window N]            persona-drift signals (grown salience share, trigger KL)
     mind goals                           goal-structure signals: open commitments/expectations, tension span, newly-formed goals
+    mind predictions                     prediction-error traces: counts, trace rate over the last 100 prediction-carrying events, recent + largest errors (read-only)
     mind consolidate [--list]          dry-run consolidation scan (read-only); dedup/supersede/flag proposals to journal
     mind consolidate --accept <id>...  accept proposal(s): archive losers with written reasons
     mind consolidate --reject <id> --reason "..."
@@ -68,6 +69,7 @@ HABITS = BASE / "habits-formed.json"
 DORMANCY = BASE / "authored-dormancy.json"
 PROVENANCE = BASE / "provenance.json"
 EXPECTATIONS = BASE / "expectations.json"
+PREDICTION_ERRORS = BASE / "prediction_errors.json"
 MOOD = BASE / "mood.json"
 PERSONALITY_DRIFT = BASE / "personality-drift.json"
 GOALS = BASE / "goals.json"
@@ -122,6 +124,7 @@ def _subject(provider=None):
                              habits_path=HABITS,
                              dormancy_path=DORMANCY,
                              expectation_path=EXPECTATIONS,
+                             prediction_errors_path=PREDICTION_ERRORS,
                              mood_path=MOOD)
     if isinstance(provider, InboxCognition):
         # Stamp queued prompts with the store tick and record sequence at
@@ -174,6 +177,7 @@ def _init_wipe_targets():
         ("PROVENANCE", PROVENANCE, False),
         ("EXPECTATION_POLICY", INBOX.parent / POLICY_FILE_NAME, False),
         ("EXPECTATIONS", EXPECTATIONS, False),
+        ("PREDICTION_ERRORS", PREDICTION_ERRORS, False),
         ("MOOD", MOOD, False),
         ("PERSONALITY_DRIFT", PERSONALITY_DRIFT, False),
         ("GOALS", GOALS, False),
@@ -329,6 +333,13 @@ def cmd_init(args):
     # which would otherwise brick --force before the wipe ran.
     if EXPECTATIONS.exists():
         EXPECTATIONS.unlink()
+    # Prediction-error trace sidecar (2026-11-14): stale failed
+    # predictions must never attach to a reseeded incarnation's ticks
+    # (same bug class as the salience/familiarity resets above). Wiped
+    # BEFORE construction: the tracker fails loud on a corrupt sidecar,
+    # which would otherwise brick --force before the wipe ran.
+    if PREDICTION_ERRORS.exists():
+        PREDICTION_ERRORS.unlink()
     # Slow affective residue sidecar (2026-11-03): stale residues must
     # never attach to a reseeded incarnation's ticks (same bug class as
     # the salience/familiarity resets above). Wiped BEFORE construction:
@@ -1699,6 +1710,46 @@ def cmd_goals(args):
     return 0
 
 
+def cmd_predictions(args):
+    """Prediction-error report (Domain 21): the engine's own surprise, observed.
+
+    Read-only: the tracker constructor only reads the sidecar, and
+    report() is a pure read. This command constructs no subject and
+    touches no store — it never writes the sidecar and never mints one
+    on a fresh store. A corrupt sidecar raises ValueError (fail loud),
+    like the other trackers.
+    """
+    from .prediction_errors import PredictionErrorTracker
+    tracker = PredictionErrorTracker(PREDICTION_ERRORS)
+    rep = tracker.report()
+    print("predictions — read-only")
+    print(f"  prediction-carrying owned events: {rep['prediction_carrying_events']}")
+    print(f"  suprathreshold traces: {rep['traces']}")
+    if rep["window_rate"] is None:
+        print("  trace rate: undefined — no prediction-carrying events yet")
+    else:
+        print(f"  trace rate (last {rep['window']} prediction-carrying "
+              f"events): {rep['window_rate'] * 100:.1f}% "
+              f"({rep['window_traces']} traces)")
+    if not rep["recent"]:
+        print("  recent traces: none")
+    else:
+        print("  recent traces:")
+        for r in rep["recent"]:
+            print(f"    [tick {r['tick']}] {r['key']}: expected "
+                  f"{r['expected']:.2f} -> actual {r['actual']:.2f} "
+                  f"(error {r['error']:.2f})")
+    if not rep["largest"]:
+        print("  largest errors: none")
+    else:
+        print("  largest errors:")
+        for r in rep["largest"]:
+            print(f"    [tick {r['tick']}] {r['key']}: expected "
+                  f"{r['expected']:.2f} -> actual {r['actual']:.2f} "
+                  f"(error {r['error']:.2f})")
+    return 0
+
+
 # -- prompt deferral (Domain 19, 2026-11-12) -------------------------------
 # The waker contract's third option: answer / pass / defer. A defer
 # places a prompt in a named bucket with a revisit time and a reminder
@@ -2328,6 +2379,9 @@ def main(argv=None):
 
     p = sub.add_parser("goals", help="goal-structure signals: open commitments/expectations, tension span, newly-formed goals")
     p.set_defaults(func=cmd_goals)
+
+    p = sub.add_parser("predictions", help="prediction-error traces: counts, trace rate over the last 100 prediction-carrying events, recent + largest errors (read-only)")
+    p.set_defaults(func=cmd_predictions)
 
     p = sub.add_parser("defer", help="set a queued prompt aside into a "
                                      "bucket instead of answering it now "

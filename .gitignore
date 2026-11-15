@@ -47,6 +47,12 @@ expectations.json
 # rule lives in calibos_mind/counterfactual.py, which IS tracked; only the
 # per-run records stay private.
 counterfactuals.json
+# Prediction-error traces (2026-11-14): suprathreshold |actual - ema|
+# surprises from the learned-expectation loop. Private metacognitive
+# state, local-only like salience.json — the trace rule lives in
+# calibos_mind/prediction_errors.py, which IS tracked; only the per-run
+# records stay private.
+prediction_errors.json
 # Habit formation (2026-10-02): rolling (trigger, action) co-fire window,
 # formed-habit metadata, and removal archive. Private procedural-learning
 # state, local-only like salience.json — the formation/growth/decay rules

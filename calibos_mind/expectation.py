@@ -39,6 +39,12 @@ What changes (contract: research/specs/2026-10-22-learned-expectations.md):
    Read-only commands and dream ticks never write the sidecar (dream ticks
    never call ``step()`` at all; a suspension flag is set as belt-and-braces
    during ``dream_tick``). ``mind init --force`` wipes the sidecar.
+5. Prediction-error trace (domain 21, 2026-11-14, see
+   ``calibos_mind/prediction_errors.py``): when the event carried a tracker
+   prediction, the overlay also observes ``|actual - ema|`` into the
+   prediction-error sidecar (suprathreshold only), after the engine body
+   runs, under the same suspension/explicit gating. The observation is
+   strictly subordinate to the tick and can never fail it.
 
 Implementation notes:
 
@@ -177,6 +183,7 @@ def _own_event_with_expectations(self, event: Event):
     suspended = getattr(self, "_expectation_suspended", False)
     explicit = event.expected_valence is not None
     shadow = event
+    ema = None
     if tracker is not None and not suspended and not explicit:
         ema = tracker.predict(event)
         if ema is not None:
@@ -194,6 +201,35 @@ def _own_event_with_expectations(self, event: Event):
     owned = _ORIGINAL_OWN_EVENT(self, shadow)
     if tracker is not None and not suspended and not explicit:
         tracker.learn(event, self.state.tick)
+        if ema is not None:
+            # Prediction-error trace (domain 21, 2026-11-14): this event
+            # carried a tracker prediction, so the engine's own surprise
+            # quantity |actual - ema| is observable. The pre-learn EMA
+            # captured above is the prediction; learn() has already moved
+            # it, so re-reading predict() here would measure the wrong
+            # thing. Runs AFTER the engine body (use-then-update, like
+            # learn): a failed event never traces. Strictly subordinate
+            # to the tick — an observation failure is swallowed, never a
+            # reason for a tick the pristine engine would complete to
+            # fail (counterfactual discipline). Same suspension gating
+            # as predict/learn: dream ticks never trace.
+            petracker = getattr(self, "_prediction_error_tracker", None)
+            if petracker is not None:
+                try:
+                    actual = (
+                        event.actual_valence
+                        if event.actual_valence is not None
+                        else event.valence
+                    )
+                    petracker.observe(
+                        tick=self.state.tick,
+                        key=_key_for(event),
+                        expected=ema,
+                        actual=actual,
+                        error=abs(float(actual) - float(ema)),
+                    )
+                except Exception:
+                    pass
     return owned
 
 

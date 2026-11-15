@@ -11,6 +11,90 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-14 — Prediction-error trace (Domain 21 Error and imperfection, in builder/critic loop)
+
+Spec: `research/specs/2026-11-14-prediction-error-trace.md` (domain 21,
+cycle 2). The mind already had a real prediction loop (learned
+expectations, 2026-10-22): the engine's surprise is `|actual - ema|`,
+a function of lived history. But that surprise was computed and
+consumed silently — nothing ever observed a failed prediction. This
+mutation makes the engine's own surprise visible, and installs no
+mistake: it observes one.
+
+New module `calibos_mind/prediction_errors.py`, mirroring
+`counterfactual.py` in shape and discipline. Sidecar
+`prediction_errors.json` (`{"records": [...],
+"prediction_carrying_events": N}`, capped at the newest 128 records):
+one record per suprathreshold prediction error — `tick`, `key`
+(`kind|sorted-tags`), `expected`, `actual`, `error`, `n` (the
+prediction-event ordinal). The counter and the ordinal exist so `mind
+predictions` can report the trace rate over the last 100
+prediction-carrying owned events exactly, from the sidecar alone. Hook
+inside the existing `_own_event_with_expectations` overlay: when a
+non-explicit event carries a tracker prediction, `error = |actual -
+ema|` with the same `actual` the overlay hands the engine, using the
+pre-learn EMA; if `error >= THRESHOLD` the trace is appended after
+the engine body runs (use-then-update, like `learn`). The observation
+is strictly subordinate to the tick (failures swallowed, counterfactual
+discipline) and shares the overlay's suspension/explicit gating, so
+dream ticks never trace and feeder-style explicit events never trace
+or learn. `mind predictions` is a read-only report (counts, window
+rate, recent traces, largest errors) that constructs the tracker
+directly from the sidecar — no subject, no store touch, never mints a
+sidecar on a fresh store. The tracker is cached on the subject and
+re-pointed to each fresh engine on `_restore` (expectation pattern),
+so no pending-carryover bookkeeping is needed: `observe()` writes
+synchronously in the overlay, like the expectations `learn()`. No
+change to the frozen engine or the cartridge (fingerprint unchanged).
+Revert = delete the module + the hook lines in `expectation.py` + the
+`_attach_prediction_errors` wiring in `subject.py` + the
+`cmd_predictions`/path wiring in `cli.py` + the sidecar.
+
+Threshold calibration (builder's first job, measured before fixing the
+constant; script at `/tmp/calibrate_prediction_errors.py`, now
+discarded with its tmp stores). Valence spans [-1, 1], so error spans
+[0, 2]. Step stream (20 same-key events at 0.5, then 0.0): errors
+after the step are 0.5, 0.35, 0.245, 0.1715, ... — exactly one trace
+requires THRESHOLD in (0.35, 0.5]. Mixed stream (6 keys, per-key
+random-walk valence, start U(-0.5, 0.5), step N(0, 0.1), clipped to
+[-1, 1], 600 events, seed 20261114): mean error 0.109, median 0.093,
+p90 0.224, p95 0.276, p99 0.373, max 0.444; trace rates 0.40 -> 0.34%,
+0.45 -> 0.00%, 0.50 -> 0.00%. Five-seed sweep: at 0.45 the rate stays
+<= 0.17% at sigma 0.1 and <= 3.03% at sigma 0.15; at 0.40 one
+sigma-0.15 seed reaches 6.57%, over the 5% tripwire. Constant stream
+(100 same-key events at 0.3): every error exactly 0.0, zero traces.
+IID-uniform reference (valence U(-1, 1) per event): mean error 0.517,
+~54% trace rate at 0.45 — reported, not calibrated against: a key
+whose valence is pure noise carries no predictive signal, so its
+errors should trace often. Chosen THRESHOLD = 0.45: above the mixed
+stream's p99 (0.373) and the deterministic step-tail second error
+(0.35), below the 0.5 step that must trace, with <5% on coherent
+streams up to sigma 0.15. 0.50 was rejected (zero margin on the
+fitness step's error); 0.40 was rejected (fails <5% on a sigma-0.15
+seed). At sigma 0.2 even 0.50 exceeds 5% — that near-noise regime is
+what the in-vivo revert signal watches, not what the threshold is
+tuned for.
+
+`mind init --force` wipes the sidecar, including a corrupt one (wipe
+runs before construction, like the other fail-loud trackers). A
+corrupt sidecar raises ValueError at subject construction, before any
+tick advances, bytes untouched. `mind predictions` on a fresh store
+reports zero with the rate "undefined" (never a quiet zero) and mints
+no sidecar. Assess after 2026-11-28.
+
+Round 2 (critic FAIL round 1, one defect fixed in code, tests unchanged):
+`report()`'s docstring claimed the cap could not hide a window trace,
+but that held only for `window <= 128`: with 200 traced events,
+`report(window=200)` returned `window_traces=128` and a 0.64 rate,
+silently diluted and presented as exact. The effective window is now
+clamped to `PREDICTION_ERROR_CAP` (128) and the reported `window` is
+the clamped window, so the rate is exact for the window reported
+(`report(window=200)` on 200 traced events now reports window 128,
+128 traces, rate 1.0). The default 100-window used by `mind
+predictions` is unaffected. Clamping was chosen over raising
+ValueError so the report stays a read-only summary that never refuses
+a caller.
+
 ## 2026-11-12 — Weariness-gated prompt deferral with categorized buckets (Domain 19 Agency, in builder/critic loop)
 
 Round 3 (critic FAIL round 2, one defect fixed in code, tests unchanged):

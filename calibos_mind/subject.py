@@ -40,7 +40,8 @@ class CalibosSubject(EndogenousSubject):
     def __init__(self, *args, salience_path=None, interoception_path=None,
                  familiarity_path=None, ambivalence_path=None, habits_path=None,
                  counterfactual_path=None, dormancy_path=None,
-                 expectation_path=None, mood_path=None, **kwargs):
+                 expectation_path=None, prediction_errors_path=None,
+                 mood_path=None, **kwargs):
         self._salience_path = salience_path
         self._interoception_path = interoception_path
         self._familiarity_path = familiarity_path
@@ -49,8 +50,10 @@ class CalibosSubject(EndogenousSubject):
         self._counterfactual_path = counterfactual_path
         self._dormancy_path = dormancy_path
         self._expectation_path = expectation_path
+        self._prediction_errors_path = prediction_errors_path
         self._mood_path = mood_path
         self._expectation_tracker = None
+        self._prediction_error_tracker = None
         self._dreaming = False
         super().__init__(*args, **kwargs)
         # Fresh stores get a stock workspace from __init__; existing stores are
@@ -70,6 +73,7 @@ class CalibosSubject(EndogenousSubject):
         self._attach_habits()
         self._attach_dormancy()
         self._attach_expectation()
+        self._attach_prediction_errors()
         self._attach_mood()
 
     def _attach_mood(self):
@@ -208,6 +212,26 @@ class CalibosSubject(EndogenousSubject):
                     self._expectation_path)
             self.engine._expectation_tracker = self._expectation_tracker
 
+    def _attach_prediction_errors(self):
+        # Prediction-error traces (see prediction_errors.py). The tracker
+        # holds the trace sidecar; the constructor only reads it. The
+        # tracker is (re-)attached to the current engine instance here
+        # because _restore swaps in a fresh engine on every transaction —
+        # the patched _own_event resolves it per call via
+        # engine._prediction_error_tracker. Re-attachment is a pure
+        # pointer move: it never writes the sidecar, so read-only
+        # commands and dream ticks stay byte-identical. No pending
+        # carryover is needed: observe() writes synchronously inside the
+        # overlay (like the expectations learn()), so the tracker never
+        # holds unflushed state across a _restore.
+        if self._prediction_errors_path is not None:
+            from .prediction_errors import PredictionErrorTracker
+            if self._prediction_error_tracker is None:
+                self._prediction_error_tracker = PredictionErrorTracker(
+                    self._prediction_errors_path)
+            self.engine._prediction_error_tracker = self._prediction_error_tracker
+            self.workspace.prediction_error_tracker = self._prediction_error_tracker
+
     def _live_open_keys(self) -> set[str]:
         from .unresolved import live_open_keys
         return live_open_keys(self.engine.state, self.continuity.state)
@@ -323,6 +347,7 @@ class CalibosSubject(EndogenousSubject):
         self._attach_habits()
         self._attach_dormancy()
         self._attach_expectation()
+        self._attach_prediction_errors()
         self._attach_mood()
         # from_dict builds a fresh CalibosWorkspace, dropping ad-hoc
         # attributes — re-set the display name (see __init__).
