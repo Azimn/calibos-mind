@@ -295,12 +295,23 @@ def test_improving_fifth_firing_mints_no_note():
 def test_identical_scripts_produce_byte_identical_sidecar():
     def _run():
         tmp = _tmp()
-        _seed_formed(tmp, HUNGER_KEY, "hunger", "seek_contact")
-        subject = _make_subject(tmp)
-        for _ in range(16):
-            _hunger_tick(subject)
-        assert len(_stale_notes(subject)) == 1
-        return (tmp / "habits-formed.json").read_bytes()
+        # Canonical redirect per run: _run_tick constructs the
+        # cli-level trackers (including followthrough) from the cli
+        # module paths, and two fresh stores must not share one
+        # sidecar tree across a tick restart (the followthrough
+        # tracker fails loud on out-of-order ticks, by spec).
+        from conftest import redirect_all_cli_paths
+        previous = redirect_all_cli_paths(tmp)
+        try:
+            _seed_formed(tmp, HUNGER_KEY, "hunger", "seek_contact")
+            subject = _make_subject(tmp)
+            for _ in range(16):
+                _hunger_tick(subject)
+            assert len(_stale_notes(subject)) == 1
+            return (tmp / "habits-formed.json").read_bytes()
+        finally:
+            for name, value in previous.items():
+                setattr(cli, name, value)
 
     assert _run() == _run()
 
@@ -378,15 +389,25 @@ def test_recovery_after_crashed_mint_mints_exactly_once():
                  "trigger_need": "hunger", "consecutive_firings": 5,
                  "last_delta": 0.002, "start_tick": 2, "end_tick": 14}}}
     (tmp2 / "habits-formed.json").write_text(json.dumps(sc2))
-    subject2 = _make_subject(tmp2)
-    _hunger_tick(subject2)  # tick 1: recovery re-mints the owed episode
-    notes = _stale_notes(subject2)
-    assert len(notes) == 1, [n.first_person for n in notes]
-    assert parse_stale_note_text(notes[0].first_person)["start_tick"] == 2
-    _hunger_tick(subject2)  # ack ran; no duplicate
-    assert len(_stale_notes(subject2)) == 1
-    entry2 = _streak(tmp2, HUNGER_KEY)
-    assert entry2["owed"] is None and entry2["noted_start"] == 2
+    # The recovery store restarts ticks at 1: route the CLI at tmp2's
+    # own tree through the canonical redirect, or _run_tick's
+    # followthrough construction would read the first store's log
+    # (ticks 1-14) and fail loud on the restarted tick 1, by spec.
+    from conftest import redirect_all_cli_paths
+    previous = redirect_all_cli_paths(tmp2)
+    try:
+        subject2 = _make_subject(tmp2)
+        _hunger_tick(subject2)  # tick 1: recovery re-mints the owed episode
+        notes = _stale_notes(subject2)
+        assert len(notes) == 1, [n.first_person for n in notes]
+        assert parse_stale_note_text(notes[0].first_person)["start_tick"] == 2
+        _hunger_tick(subject2)  # ack ran; no duplicate
+        assert len(_stale_notes(subject2)) == 1
+        entry2 = _streak(tmp2, HUNGER_KEY)
+        assert entry2["owed"] is None and entry2["noted_start"] == 2
+    finally:
+        for name, value in previous.items():
+            setattr(cli, name, value)
 
 
 # -- strict loading of the new sidecar key ----------------------------------------

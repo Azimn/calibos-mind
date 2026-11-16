@@ -53,6 +53,13 @@ counterfactuals.json
 # calibos_mind/prediction_errors.py, which IS tracked; only the per-run
 # records stay private.
 prediction_errors.json
+# Realization follow-through log (2026-11-15): action-bearing waking
+# ticks, the evidence base for whether recorded realizations are
+# followed by conduct change. Private metacognitive state, local-only
+# like salience.json — the tracker and report live in
+# calibos_mind/followthrough.py, which IS tracked; only the per-run
+# action log stays private.
+followthrough.json
 # Habit formation (2026-10-02): rolling (trigger, action) co-fire window,
 # formed-habit metadata, and removal archive. Private procedural-learning
 # state, local-only like salience.json — the formation/growth/decay rules

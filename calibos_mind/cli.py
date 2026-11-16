@@ -33,6 +33,7 @@ indefinitely. Quick reference:
     mind review [n]                    recent private thoughts
     mind drift [--window N]            persona-drift signals (grown salience share, trigger KL)
     mind goals                           goal-structure signals: open commitments/expectations, tension span, newly-formed goals
+    mind followthrough                   realization follow-through: whether recorded realizations are followed by conduct change (read-only)
     mind predictions                     prediction-error traces: counts, trace rate over the last 100 prediction-carrying events, recent + largest errors (read-only)
     mind consolidate [--list]          dry-run consolidation scan (read-only); dedup/supersede/flag proposals to journal
     mind consolidate --accept <id>...  accept proposal(s): archive losers with written reasons
@@ -73,6 +74,7 @@ PREDICTION_ERRORS = BASE / "prediction_errors.json"
 MOOD = BASE / "mood.json"
 PERSONALITY_DRIFT = BASE / "personality-drift.json"
 GOALS = BASE / "goals.json"
+FOLLOWTHROUGH = BASE / "followthrough.json"
 DEFERRALS = BASE / "deferrals.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
@@ -181,6 +183,7 @@ def _init_wipe_targets():
         ("MOOD", MOOD, False),
         ("PERSONALITY_DRIFT", PERSONALITY_DRIFT, False),
         ("GOALS", GOALS, False),
+        ("FOLLOWTHROUGH", FOLLOWTHROUGH, False),
         ("DEFERRALS", DEFERRALS, False),
         ("SALIENCE", SALIENCE, False),
         ("INTEROCEPTION", INTEROCEPTION, False),
@@ -362,6 +365,13 @@ def cmd_init(args):
     # otherwise brick --force before the wipe ran.
     if GOALS.exists():
         GOALS.unlink()
+    # Realization follow-through sidecar (2026-11-15): stale action-log
+    # rows must never attach to a reseeded incarnation's ticks (same bug
+    # class as the salience/familiarity resets above). Wiped BEFORE
+    # construction: the tracker fails loud on a corrupt sidecar, which
+    # would otherwise brick --force before the wipe ran.
+    if FOLLOWTHROUGH.exists():
+        FOLLOWTHROUGH.unlink()
     # Deferral-bucket sidecar (2026-11-12): stale buckets, deferred
     # items, and release records must never attach to a reseeded
     # incarnation's ticks (same bug class as the
@@ -454,6 +464,16 @@ def _run_tick(subject):
     # read-only commands never tick, so neither can write the sidecar.
     from .goals import GoalTracker
     gtracker = GoalTracker(GOALS)
+    # Realization follow-through instrument (domain 22, 2026-11-15):
+    # the tracker is constructed here, before the heartbeat, so a
+    # corrupt sidecar fails loudly before the tick runs (fail-closed,
+    # same precedent as mood/interoception/personality/goals), never
+    # silently resets. It is fed after the tick's action is chosen,
+    # below, at the same hook as the conduct-drift feed. Waking ticks
+    # only — _run_tick never serves dream ticks, and read-only commands
+    # never tick, so neither can write the sidecar.
+    from .followthrough import FollowthroughTracker
+    ftracker = FollowthroughTracker(FOLLOWTHROUGH)
     # Host-layer feeder (2026-10-08): slow tick-count rhythm of the frozen
     # engine's food/drink events — waking ticks only. Enqueued before the
     # heartbeat so the tick consumes them as external events; the engine's
@@ -468,6 +488,12 @@ def _run_tick(subject):
     # on a recorded tick (no-op write discipline, mirroring familiarity).
     if ptracker.observe(result["tick"], result.get("action")):
         ptracker.save()
+    # Realization follow-through feed: record the tick's chosen action
+    # in the action log. A tick with no chosen action records nothing
+    # (observe returns False); save only on a recorded tick (no-op
+    # write discipline, mirroring familiarity/personality).
+    if ftracker.observe(result["tick"], result.get("action")):
+        ftracker.save()
     # Goal-structure feed: snapshot the live goal population for this
     # waking tick. Every tick records a row, even a zero-open tick (a
     # zero resets the tension run and is data, not an absence), so the
@@ -1710,6 +1736,52 @@ def cmd_goals(args):
     return 0
 
 
+def cmd_followthrough(args):
+    """Realization follow-through report (Domain 22): whether recorded
+    realizations are followed by conduct change.
+
+    Read-only: the tracker constructor only reads the sidecar, and
+    report() is a pure read of the live store + sidecar. Never writes
+    followthrough.json — running this command twice returns the same
+    report and leaves the sidecar byte-identical, and a fresh store
+    has no sidecar to mint.
+    """
+    from .followthrough import FollowthroughTracker, report
+    subject = _subject()
+    rep = report(subject, FollowthroughTracker(FOLLOWTHROUGH))
+
+    def _fmt_shares(shares):
+        return "{" + ", ".join(f"{a}: {s:.2f}"
+                               for a, s in shares.items()) + "}"
+
+    print(f"followthrough (tick {rep['tick']}, "
+          f"{rep['observed_ticks']} observed action-bearing ticks, "
+          f"{rep['realizations']} realization(s)) — read-only")
+    if not rep["rows"]:
+        print("  no realization records yet")
+        return 0
+    if rep["mean_tv"] is None:
+        print(f"  mean tv distance: undefined — no measurable realization "
+              f"({rep['insufficient']} insufficient-window)")
+    else:
+        print(f"  mean tv distance: {rep['mean_tv']:.2f} over "
+              f"{rep['measurable']} measurable "
+              f"({rep['insufficient']} insufficient-window)")
+    for row in rep["rows"]:
+        head = (f"  {row['need']} swing {row['swing_tick']} "
+                f"conv {row['conv_tick']} "
+                f"(felt {row['felt_band']}, actual {row['actual_band']}):")
+        if row["status"] == "insufficient-window":
+            print(f"{head} insufficient window "
+                  f"(before {row['before_count']}/20, "
+                  f"after {row['after_count']}/20)")
+        else:
+            print(f"{head} tv {row['tv']:.2f}  "
+                  f"before {_fmt_shares(row['before_mix'])} "
+                  f"after {_fmt_shares(row['after_mix'])}")
+    return 0
+
+
 def cmd_predictions(args):
     """Prediction-error report (Domain 21): the engine's own surprise, observed.
 
@@ -2379,6 +2451,9 @@ def main(argv=None):
 
     p = sub.add_parser("goals", help="goal-structure signals: open commitments/expectations, tension span, newly-formed goals")
     p.set_defaults(func=cmd_goals)
+
+    p = sub.add_parser("followthrough", help="realization follow-through: whether recorded realizations are followed by conduct change (read-only)")
+    p.set_defaults(func=cmd_followthrough)
 
     p = sub.add_parser("predictions", help="prediction-error traces: counts, trace rate over the last 100 prediction-carrying events, recent + largest errors (read-only)")
     p.set_defaults(func=cmd_predictions)

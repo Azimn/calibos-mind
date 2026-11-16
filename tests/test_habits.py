@@ -198,14 +198,28 @@ def test_no_qualifying_repetition_no_formation_and_parity():
 
     def _run(with_habits):
         tmp = _tmp()
-        subject = _make_subject(tmp, with_habits=with_habits)
-        actions = []
-        for needs, expected in scripts:
-            result = _script_tick(subject, needs, _pressures(), _baselines())
-            actions.append(result["action"])
-            assert result["action"] == expected, (needs, result["action"])
-        trace = subject.inspect()["trace"]
-        return tmp, subject, actions, [(t["kind"], t.get("action")) for t in trace]
+        # Route the CLI at this run's own tree through the canonical
+        # redirect: _run_tick constructs every cli-level tracker
+        # (personality, goals, followthrough, ...) from the cli module
+        # paths, and two fresh stores sharing one sidecar tree would
+        # restart ticks at 1 on top of the first run's log (the
+        # followthrough tracker fails loud on out-of-order ticks, by
+        # spec). The conftest fixture only isolates per test, not per
+        # run inside a test.
+        from conftest import redirect_all_cli_paths
+        previous = redirect_all_cli_paths(tmp)
+        try:
+            subject = _make_subject(tmp, with_habits=with_habits)
+            actions = []
+            for needs, expected in scripts:
+                result = _script_tick(subject, needs, _pressures(), _baselines())
+                actions.append(result["action"])
+                assert result["action"] == expected, (needs, result["action"])
+            trace = subject.inspect()["trace"]
+            return tmp, subject, actions, [(t["kind"], t.get("action")) for t in trace]
+        finally:
+            for name, value in previous.items():
+                setattr(cli, name, value)
 
     tmp_a, subj_a, actions_a, trace_a = _run(True)
     tmp_b, subj_b, actions_b, trace_b = _run(False)
@@ -450,11 +464,21 @@ def test_authored_habits_byte_unchanged():
 def test_identical_sequences_byte_identical_sidecar():
     def _run():
         tmp = _tmp()
-        subject = _make_subject(tmp)
-        for _ in range(5):
-            _script_tick(subject, _needs(curiosity=0.80),
-                         _pressures(), _baselines())
-        return (tmp / "habits-formed.json").read_bytes()
+        # Canonical redirect per run (see test_no_qualifying_... above):
+        # _run_tick reads the cli-level sidecar paths, and two fresh
+        # stores must not share one followthrough log across a tick
+        # restart.
+        from conftest import redirect_all_cli_paths
+        previous = redirect_all_cli_paths(tmp)
+        try:
+            subject = _make_subject(tmp)
+            for _ in range(5):
+                _script_tick(subject, _needs(curiosity=0.80),
+                             _pressures(), _baselines())
+            return (tmp / "habits-formed.json").read_bytes()
+        finally:
+            for name, value in previous.items():
+                setattr(cli, name, value)
 
     assert _run() == _run()
 

@@ -11,6 +11,57 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-15 — Realization follow-through tracker (Domain 22 Internal causality, in builder/critic loop)
+
+Spec: `research/specs/2026-11-15-realization-followthrough.md` (domain 22).
+The causal chain was recorded (counterfactual traces, prediction-error
+traces, realization records with swing/convergence ticks), but whether
+a recorded consequence ever changes later conduct was untested — the
+2026-11-14 domain-21 pass noted no conduct change observably follows a
+realization record. This instrument supplies the missing evidence: it
+measures whether a realization is followed by conduct change, and
+installs no conduct change itself.
+
+New module `calibos_mind/followthrough.py`, mirroring
+`personality.py` in shape and discipline. Sidecar
+`followthrough.json` (a bare capped, append-only log
+`[[tick, action], ...]`, cap 256 rows mirroring the engine trace cap)
+of action-bearing waking ticks, fed ONLY from `cli._run_tick` after
+the tick's action is chosen — the engine's chosen action
+(`last_intention` / `heartbeat()` result `"action"`), exactly the
+source personality.py uses; ticks with no chosen action record
+nothing. `mind followthrough` scans the store for realization records
+with the canonical `interoception.parse_realization_text` parser and,
+per realization, compares the action-share distribution in the 20
+action-bearing ticks before the swing tick with the 20 after the
+convergence tick, as total variation distance (half the L1 distance
+over the union of actions, range [0, 1]). A realization whose before-
+or after-window is not fully present reports `insufficient-window`
+for that row — never a quiet 0.0 — and the aggregate mean excludes
+such rows and says so; with zero measurable realizations the mean is
+undefined, never 0.0. Read-only commands and dream ticks never write
+the sidecar; `init --force` wipes it (including a corrupt one).
+Corrupt sidecar shapes (truncated JSON, wrong types, row not
+[tick, action], negative tick, tick out of order) fail loud at
+construction, before the tick advances.
+
+Test-harness repair (same run): the strict out-of-order validation
+surfaced a latent flaw in five tests that run two fresh stores inside
+one test (`test_habits.py`, `test_habits_stale_note.py`,
+`test_persistent_near_miss_note.py`,
+`test_critic_revert_pnm_r1.py`): their `_run()` closures built fresh
+subjects in fresh tmp dirs but left the cli-level sidecar paths on
+the per-test tree, so the second run restarted ticks at 1 on top of
+the first run's log. Each `_run()` now routes through the canonical
+`conftest.redirect_all_cli_paths` per run (the documented remedy for
+the hand-rolled-partial-set bug class). Also renamed the nested
+`_fmt` helper in `cmd_followthrough` to `_fmt_shares`, purely for
+readability: two same-named nested helpers in one module invite
+confusion when reading the code. (Correction, 2026-11-15: the
+shadowing-definitions genome test checks module-level defs only, so
+no genome rule required this rename; the earlier claim that it did
+was wrong.)
+
 ## 2026-11-14 — Prediction-error trace (Domain 21 Error and imperfection, in builder/critic loop)
 
 Spec: `research/specs/2026-11-14-prediction-error-trace.md` (domain 21,

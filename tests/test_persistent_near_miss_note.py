@@ -382,10 +382,21 @@ def test_old_sidecar_without_noted_loads_cleanly():
 def test_identical_view_sequences_produce_byte_identical_sidecar():
     def _run():
         tmp = _tmp()
-        subject, ids = _seed_and_boost(tmp)
-        _ticks(subject, 12)
-        assert _retired_notes(subject) == []
-        return (tmp / "familiarity.json").read_bytes()
+        # Canonical redirect per run: _run_tick constructs the
+        # cli-level trackers (including followthrough) from the cli
+        # module paths, and two fresh stores must not share one
+        # sidecar tree across a tick restart (the followthrough
+        # tracker fails loud on out-of-order ticks, by spec).
+        from conftest import redirect_all_cli_paths
+        previous = redirect_all_cli_paths(tmp)
+        try:
+            subject, ids = _seed_and_boost(tmp)
+            _ticks(subject, 12)
+            assert _retired_notes(subject) == []
+            return (tmp / "familiarity.json").read_bytes()
+        finally:
+            for name, value in previous.items():
+                setattr(cli, name, value)
 
     assert _run() == _run()
 
