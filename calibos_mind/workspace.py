@@ -32,7 +32,12 @@ from __future__ import annotations
 import re
 from dataclasses import FrozenInstanceError
 
-from jelly_psiduck.workspace import CognitiveView, FeltExperience, SubjectiveWorkspace
+from jelly_psiduck.workspace import (
+    CognitiveView,
+    FeltExperience,
+    SubjectiveExperience,
+    SubjectiveWorkspace,
+)
 
 from .consolidate import excluded_ids
 from .familiarity import FAMILIARITY_WINDOW
@@ -133,16 +138,104 @@ class CalibosWorkspace(SubjectiveWorkspace):
 
     def __init__(self, *args, limit=RECORD_LIMIT, **kwargs):
         super().__init__(*args, limit=limit, **kwargs)
+        # Thinker-identity stamps (Domain 23, 2026-11-16): record id ->
+        # thinker label, for thinker-authored thoughts only. The frozen
+        # engine's SubjectiveExperience has no `thinker` field, so the
+        # stamp cannot live on the record object itself; it lives here
+        # and is written into the record dicts by to_dict() / read back
+        # by from_dict(). It is provenance metadata in the same class as
+        # `generated_by`: no ranking, retrieval, or conduct path reads it.
+        self._thinker_stamps: dict[str, str] = {}
 
     def add(self, tick, source, text, **metadata):
         # Capture what the engine's truncation would silently evict, before
         # super().add() drops it: super appends then keeps records[-limit:],
         # so the evictees are exactly the head that no longer fits.
+        # `thinker` is wrapper-layer provenance, not an engine record
+        # field: pop it before the frozen dataclass constructor sees it.
+        # The stamp map is the enforcement point: a stamp is accepted
+        # ONLY for a thinker-authored thought record (source "thought")
+        # carrying a validated non-empty string label. Anything else
+        # fails closed — dropped, never persisted — so in-memory state,
+        # the persisted payload, and the loaded state always agree, and
+        # no stamp can ever land on an engine/dream/interoception or any
+        # other non-thinker-authored record (the spec's revert signal).
+        # (Lazy import: subject imports this module at module level.)
+        thinker = metadata.pop("thinker", None)
+        if thinker is not None:
+            if source != "thought":
+                thinker = None
+            else:
+                from .subject import validate_thinker_label
+                try:
+                    thinker = validate_thinker_label(thinker)
+                except ValueError:
+                    thinker = None
         evictees = self.records[: max(len(self.records) + 1 - self.limit, 0)]
         item = super().add(tick, source, text, **metadata)
+        if thinker is not None:
+            self._thinker_stamps[item.id] = thinker
         for evicted in evictees:
+            # A stamp for a record that left the window is stale: drop it
+            # with the record, so the map never outlives the store.
+            self._thinker_stamps.pop(evicted.id, None)
             self._archive_evicted(evicted, tick)
         return item
+
+    def to_dict(self):
+        data = super().to_dict()
+        stamps = getattr(self, "_thinker_stamps", None) or {}
+        if stamps:
+            for record in data["records"]:
+                label = stamps.get(record["id"])
+                if label is not None:
+                    record["thinker"] = label
+        return data
+
+    @classmethod
+    def from_dict(cls, data):
+        # Mirror the frozen base's from_dict, extracting the `thinker`
+        # stamp from each record dict before the frozen dataclass
+        # constructor sees it (an unknown key would raise). Legacy
+        # records without the field — and malformed stamps (non-string,
+        # empty, or failing label validation, e.g. written before the
+        # validator went Unicode-aware) — load as unstamped, never crash,
+        # so a persisted stamp can never re-enter the map unvalidated.
+        # The load boundary enforces the same rule as add(): a stamp
+        # lands only on a thinker-authored thought record (source
+        # "thought"). A stamp on any other source — e.g. written by the
+        # round-1 build, which stamped any source — is dropped here,
+        # never laundered back into the store by to_dict().
+        # Source alone is not the whole authorship test (adjudication
+        # fix 2026-11-16): the frozen engine itself authors source
+        # "thought" records that never pass through inject_thought —
+        # dream-derived echoes and echo resurfacing (generated_by is a
+        # parent record id, or None). A stamp lands only when
+        # generated_by is one inject_thought can produce: the
+        # self-authored set, or "cognition", inject_thought's default.
+        from .subject import validate_thinker_label
+        from .thinkers import is_self_authored
+        stamps: dict[str, str] = {}
+        records = []
+        for item in data.get("records", []):
+            item = dict(item)
+            label = item.pop("thinker", None)
+            for key in ("concepts", "affect", "memory_links",
+                        "concern_links", "expectation_links"):
+                item[key] = tuple(item.get(key, ()))
+            record = SubjectiveExperience(**item)
+            records.append(record)
+            if (record.source == "thought"
+                    and (is_self_authored(record.generated_by)
+                         or record.generated_by == "cognition")
+                    and isinstance(label, str) and label):
+                try:
+                    stamps[record.id] = validate_thinker_label(label)
+                except ValueError:
+                    pass
+        ws = cls(records, data.get("sequence", 0))
+        ws._thinker_stamps = stamps
+        return ws
 
     def _archive_evicted(self, record, tick):
         base = self.availability_path

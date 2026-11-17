@@ -11,6 +11,119 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-16 — Thinker-identity stamp (Domain 23 LLM leakage, in builder/critic loop)
+
+Spec: `research/specs/2026-11-16-thinker-identity-stamp.md` (domain 23,
+check 11: "Model swaps noticeably change identity" — baseline verdict
+true, untested). There was no record anywhere of which thinker answered
+which prompt, so a host-model swap was invisible to the store and its
+effect on voice/content could not be measured. This instrument makes
+swaps observable. It records provenance; it changes no conduct, no
+retrieval, no rendering.
+
+`CalibosSubject.inject_thought()` accepts an optional `thinker` label
+(`validate_thinker_label`: stripped, non-empty, max 80 chars, no
+newline or control characters; anything else raises ValueError). When
+supplied, the injected thought record carries it as a `thinker` field
+alongside `generated_by`; when absent, the record is byte-identical
+to a pre-mutation record. Only thinker-authored paths stamp (`mind
+answer`, `mind think`, `mind wake --affirm`, all through
+`inject_thought`); engine, dream-derived, interoception, and all other
+record sources never carry one, and `_add` drops any stamp on a
+dream-path record fail-closed.
+
+The frozen engine's `SubjectiveExperience` has no `thinker` field, so
+the stamp rides in the wrapper layer: `CalibosWorkspace` holds an
+id-to-label map (`_thinker_stamps`), `to_dict()` writes the label into
+the record dicts of the persisted payload, and `from_dict()` extracts
+it back out (legacy records without the field, and malformed non-string
+stamps, load as unstamped, never crash). `CalibosSubject._restore`
+hands the frozen engine a copy of the payload with the stamps
+stripped — the engine's `from_dict` would raise on the unknown key —
+and rebuilds the workspace from the original payload. No new sidecar;
+no cartridge change; no migration. The stamp is never read by any
+ranking, retrieval, or conduct path: paired synthetic stores (stamped
+vs unstamped) produce byte-identical drift/status/review/heartbeat
+output, identical admitted view ids, identical salience sidecars, and
+identical conduct traces.
+
+CLI: `mind answer --thinker LABEL` and `mind think --thinker LABEL`
+(the label is validated before the prompt is consumed, so a malformed
+label never eats a prompt; `--thinker` with `--silent` is refused,
+since no thought is recorded to stamp). New read-only command `mind
+thinkers [--window N]` (default 100): counts per thinker label over
+the most recent N thinker-authored thought records (`voluntary`,
+`voluntary:inspection`, `wake`, `answered:*`,
+`answered-external:*`), plus an `unstamped` count and the tick range
+covered; a store with no thinker-authored thoughts reports zero counts
+and an undefined range, never a quiet zero.
+
+New module `calibos_mind/thinkers.py` (pure report function);
+36 new tests in `tests/test_thinker_identity_stamp.py`.
+
+Round 2 (critic round 1, 15 of 16 attack tests failing — all five
+defects fixed, no test weakened): (1) `validate_thinker_label` is now
+Unicode-aware — it rejects categories Cc/Cf/Zl/Zp, so U+2028/U+2029
+line/paragraph separators and C1 controls (U+0080–U+009F) are refused
+like ASCII newlines, and a non-string label raises ValueError instead
+of AttributeError; (2) the free-text label `"unstamped"` no longer
+collides with the report's reserved line — `mind thinkers` prints it
+as `unstamped (thinker label): N`, keeping the reserved `unstamped: N`
+line unique (the label itself stays stampable, per the spec's free-text
+rule); (3) `is_self_authored` returns False for any non-string
+`generated_by`, so a malformed persisted record can no longer crash
+the read-only report; (4) `CalibosWorkspace.add` is now the stamp
+enforcement point — it accepts a stamp only for source `"thought"`
+with a validated non-empty string label, dropping anything else
+fail-closed, so in-memory, persisted, and loaded state always agree;
+`from_dict` likewise re-validates persisted stamps, so a stamp written
+before the validator went Unicode-aware loads as unstamped rather
+than re-entering the map unvalidated. Attack file
+`tests/adversarial/test_critic_thinker_stamp_r1.py`: 16 passed.
+`tests/`: 1183 passed. Whole-repo run: 1228 passed, 1 failed — the
+single failure is `home_sim`'s `test_import_pulls_no_mind_package`,
+a pre-existing order-dependence (it passes in isolation; it fails
+whenever any `tests/` file is collected alongside `home_sim`, because
+`tests/conftest.py` imports `calibos_mind.cli` at collection time —
+reproduced with the round-1 builder test file alone, before any
+round-2 change), not a regression from this fix.
+
+Round 3 (critic round 2, 2 of 3 attack tests failing — both defects
+fixed, no test weakened): (1) the report's disambiguator collided
+with itself — `"unstamped (thinker label)"` is a valid free-text
+label, so two labels printed byte-identical lines. `mind thinkers`
+now prints every label JSON-quoted (`  "label": N`); the encoding is
+injective, so distinct labels always print distinct lines, and no
+label can reproduce the unquoted reserved `unstamped: N` line. The
+builder tests were updated to the new format (quoted-label
+assertions), not weakened, plus a regression test seeding both
+colliding labels; (2) `from_dict` re-admitted stamps on non-thought
+records — it re-validated only the label, so a stamp persisted on a
+`"memory"` record (e.g. written by the round-1 build) re-entered the
+map and `to_dict()` wrote it back out. `from_dict` now enforces the
+same source rule as `add()`: a stamp lands only on source
+`"thought"`, and a bad persisted stamp is dropped at the load
+boundary. Attack files: r1 16 passed, r2 3 passed; builder tests 38
+passed (36 + 2 new regression tests); `tests/`: 1188 passed.
+
+Adjudication fix (design lead, 2026-11-16, after critic round 3 FAIL on
+one latent defect, 1 of 4 attack tests failing): `from_dict` admitted
+stamps on non-thinker-authored *thought* records — source alone is not
+the authorship test, because the frozen engine itself authors source
+"thought" records (dream-derived echoes, echo resurfacing with
+`generated_by` a parent record id, or `None`). No live path produces
+such a payload (only `inject_thought` passes a thinker, and `_add`
+pops it on the dream path), so the defect was latent, not live. The
+fix is one condition: `from_dict` admits a stamp only when
+`generated_by` is one `inject_thought` can produce — the self-authored
+set, or "cognition", its default. Verified against the critic's own
+r3 attack file (4/4) plus r1 (16/16), r2 (3/3), builder tests (38/38),
+and the full `tests/` suite (1192 passed, 0 failed); no critic test touched.
+Shipped on this adjudication, not a fourth builder round: the loop's
+3-round budget was spent, the fix direction was specified by the critic
+with its tests as acceptance criteria, and the fitness window
+(assess 2026-11-30) judges the shipped mutation anyway.
+
 ## 2026-11-15 — Realization follow-through tracker (Domain 22 Internal causality, in builder/critic loop)
 
 Spec: `research/specs/2026-11-15-realization-followthrough.md` (domain 22).

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import unicodedata
 
 from jelly_psiduck.endogenous import EndogenousSubject
 from jelly_psiduck.runtime import concepts
@@ -20,6 +21,41 @@ from .workspace import CalibosWorkspace
 from . import friction as _friction
 
 THOUGHT_MAX_CHARS = 600
+
+# Thinker-identity stamp (Domain 23, 2026-11-16): the answering host's
+# free-text label (e.g. a model identifier). There is no registry; the
+# label is provenance, never an identity claim, and a mislabeled stamp
+# is a data-quality note, not a mechanism failure.
+THINKER_MAX_CHARS = 80
+
+
+def validate_thinker_label(label: str) -> str:
+    """Strip and validate a thinker label; return the stripped label.
+
+    Raises ValueError on non-string, empty/whitespace-only, over-long,
+    or control-character labels. Shared by inject_thought and by
+    cmd_answer, which validates *before* consuming the prompt so a
+    malformed label never eats the prompt it was meant to answer.
+    "Control characters" is read Unicode-wide: category Cc (C0/C1
+    controls and DEL), Cf (format characters), Zl (line separator
+    U+2028) and Zp (paragraph separator U+2029). A label carrying one
+    would break the one-label-per-line `mind thinkers` report, so it
+    is refused here, not escaped later.
+    """
+    if not isinstance(label, str):
+        raise ValueError("thinker label must be a string")
+    label = label.strip()
+    if not label:
+        raise ValueError("thinker label must be non-empty")
+    if len(label) > THINKER_MAX_CHARS:
+        raise ValueError(
+            f"thinker label must be 1..{THINKER_MAX_CHARS} characters "
+            f"(got {len(label)})")
+    if any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp")
+           for c in label):
+        raise ValueError(
+            "thinker label must not contain newline or control characters")
+    return label
 
 
 def validate_thought_text(text: str) -> str:
@@ -333,7 +369,20 @@ class CalibosSubject(EndogenousSubject):
         stranded_c = old_ctracker._pending if old_ctracker is not None else []
         if old_ctracker is not None:
             old_ctracker._pending = []
-        super()._restore(raw)
+        # Thinker stamps (Domain 23, 2026-11-16): the persisted record
+        # dicts carry a `thinker` key, but the frozen engine's
+        # SubjectiveExperience has no such field, so the engine's
+        # from_dict would raise on the unknown key. Hand the engine a
+        # copy with the stamps stripped; they re-attach below via
+        # CalibosWorkspace.from_dict on the original payload.
+        sanitized = dict(raw)
+        workspace_raw = raw.get("workspace") or {}
+        sanitized["workspace"] = {
+            **workspace_raw,
+            "records": [{k: v for k, v in r.items() if k != "thinker"}
+                        for r in workspace_raw.get("records", [])],
+        }
+        super()._restore(sanitized)
         self.workspace = CalibosWorkspace.from_dict(raw["workspace"])
         self._attach_salience()
         self._attach_interoception()
@@ -374,6 +423,10 @@ class CalibosSubject(EndogenousSubject):
             # Echo resurfacing while asleep: the thought arose from the dream
             # process itself — not from any waker, provider, or prompt.
             metadata["generated_by"] = "dream-derived"
+            # Dream ticks never stamp: a thinker label on a dream-derived
+            # record would misattribute dream content to a waker. Drop
+            # any stamp rather than let it through (fail closed).
+            metadata.pop("thinker", None)
         return super()._add(source, text, **metadata)
 
     def dream_tick(self):
@@ -477,7 +530,8 @@ class CalibosSubject(EndogenousSubject):
             self.config = prior
 
     def inject_thought(self, text: str, trigger_kind: str = "answered",
-                       generated_by: str = "cognition") -> str:
+                       generated_by: str = "cognition",
+                       thinker: str | None = None) -> str:
         """Record a private thought through the inner ear, outside a heartbeat.
 
         Used for answering queued cognition prompts and for voluntary thinking.
@@ -489,9 +543,18 @@ class CalibosSubject(EndogenousSubject):
         thinker-composed, therefore still self-authored — and "cognition"
         heartbeat produced (e.g. a live model provider). Echoes that
         resurface while asleep are stamped "dream-derived" by _add, not here.
+        thinker optionally stamps the answering host's free-text label
+        (e.g. a model identifier) as a `thinker` field on the record;
+        None leaves the record unstamped (legacy behavior, byte-identical
+        to today). The stamp is provenance metadata: it is never read by
+        any ranking, retrieval, or conduct path. Only thinker-authored
+        paths pass a label — engine, dream-derived, interoception, and
+        all other record sources never carry one.
         Returns the thought's record id.
         """
         text = validate_thought_text(text)
+        if thinker is not None:
+            thinker = validate_thinker_label(thinker)
         with self._transaction():
             state = self.engine.state
             if any(r.source == "thought" and r.first_person == text
@@ -502,6 +565,7 @@ class CalibosSubject(EndogenousSubject):
                 concepts=tuple(sorted(concepts(text))),
                 generated_by=generated_by,
                 available_to_cognition=True,
+                thinker=thinker,
             )
             self.trigger = {"kind": trigger_kind, "parents": [], "depth": 1}
             self._hear(item)

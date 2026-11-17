@@ -865,8 +865,16 @@ def _normalize_prompt_id(pid: str) -> str:
 
 def cmd_answer(args):
     from .provider import InboxCognition, StalePromptError, check_prompt_fresh
-    from .subject import validate_thought_text
+    from .subject import validate_thinker_label, validate_thought_text
     args.id = _normalize_prompt_id(args.id)
+    # A thinker label records nothing under --silent (no thought is
+    # recorded), so refusing it here is fail-closed: silently dropping a
+    # user-supplied label would be a quiet loss of provenance.
+    if args.silent and getattr(args, "thinker", None) is not None:
+        print(f"{args.id}: --thinker has no effect with --silent; "
+              "nothing consumed.")
+        return 1
+    thinker = None
     if not args.silent:
         # Validate the thought before consuming the prompt: a malformed
         # thought must not eat the prompt it was meant to answer.
@@ -878,6 +886,14 @@ def cmd_answer(args):
         except ValueError as exc:
             print(f"{args.id}: refused — {exc}; prompt kept.")
             return 1
+        # Validate the thinker label before consuming the prompt, for
+        # the same reason: a malformed label must not eat the prompt.
+        if getattr(args, "thinker", None) is not None:
+            try:
+                thinker = validate_thinker_label(args.thinker)
+            except ValueError as exc:
+                print(f"{args.id}: refused — {exc}; prompt kept.")
+                return 1
     provider = InboxCognition(INBOX)
     try:
         payload = provider.consume(args.id)
@@ -951,7 +967,7 @@ def cmd_answer(args):
                   else "answered")
         tid = subject.inject_thought(
             args.text, trigger_kind="answered",
-            generated_by=f"{origin}:{args.id}@{now}")
+            generated_by=f"{origin}:{args.id}@{now}", thinker=thinker)
     except ValueError as exc:
         # The prompt is already consumed; refuse cleanly instead of a
         # traceback. Settle the expectation as refused-stale-view as well:
@@ -999,7 +1015,8 @@ def cmd_think(args):
              else "voluntary")
     try:
         tid = subject.inject_thought(args.text, trigger_kind="voluntary",
-                                     generated_by=stamp)
+                                     generated_by=stamp,
+                                     thinker=getattr(args, "thinker", None))
     except ValueError as exc:
         print(f"refused — {exc}; nothing recorded.")
         return 1
@@ -1620,6 +1637,44 @@ def cmd_recall(args):
         print("rehearsed:")
         for c, t in repeated[:5]:
             print(f"    ×{c} {t[:100]}")
+    return 0
+
+
+def cmd_thinkers(args):
+    """Thinker-identity report (Domain 23, 2026-11-16).
+
+    Read-only: counts, over the most recent N thinker-authored thought
+    records, how many each thinker label authored, plus the unstamped
+    count and the tick range covered. A store with no thinker-authored
+    thoughts reports zero counts and an undefined range, never a quiet
+    zero. The subject is constructed (which rewrites the payload row
+    with identical content, per the genome) but this command itself
+    writes nothing.
+    """
+    from .thinkers import thinkers_report
+    if args.window < 1:
+        print("thinkers --window must be at least 1.")
+        return 1
+    subject = _subject()
+    state = subject.inspect()
+    rep = thinkers_report(state["workspace"]["records"], window=args.window)
+    if rep["n"] == 0:
+        print("thinkers: no thinker-authored thoughts in range — "
+              "tick range undefined.")
+        return 0
+    print(f"thinkers (last {rep['n']} thinker-authored thoughts, "
+          f"ticks {rep['tick_min']}..{rep['tick_max']}):")
+    for label in sorted(rep["counts"]):
+        # Labels are free text, so a bare `  <label>: N` line is
+        # forgeable: the label "unstamped" collided with the reserved
+        # legacy-count line, and the round-2 disambiguator
+        # "unstamped (thinker label)" is itself a valid label and
+        # collided right back. Print every label JSON-quoted instead:
+        # the encoding is injective (distinct labels print distinct
+        # lines, however adversarial the text) and no valid label can
+        # produce the reserved line, which carries no quotes.
+        print(f"  {json.dumps(label)}: {rep['counts'][label]}")
+    print(f"  unstamped: {rep['unstamped']}")
     return 0
 
 
@@ -2353,10 +2408,18 @@ def main(argv=None):
     p.add_argument("id")
     p.add_argument("text", nargs="?", default=None)
     p.add_argument("--silent", action="store_true")
+    p.add_argument("--thinker", default=None, metavar="LABEL",
+                   help="stamp the answering host's free-text label "
+                        "(e.g. a model identifier) on the recorded "
+                        "thought as provenance; refused with --silent")
     p.set_defaults(func=cmd_answer)
 
     p = sub.add_parser("think", help="record a voluntary thought")
     p.add_argument("text")
+    p.add_argument("--thinker", default=None, metavar="LABEL",
+                   help="stamp the thinking host's free-text label "
+                        "(e.g. a model identifier) on the recorded "
+                        "thought as provenance")
     p.add_argument("--inspection", action="store_true",
                    help="stamp the thought as an inspection report "
                         "(generated_by=\"voluntary:inspection\"): the thinker "
@@ -2448,6 +2511,13 @@ def main(argv=None):
     p.add_argument("--window", type=int, default=10,
                    help="recent-trigger window size for the KL (default 10)")
     p.set_defaults(func=cmd_drift)
+
+    p = sub.add_parser("thinkers", help="thinker-identity counts over recent "
+                                         "thinker-authored thoughts (read-only)")
+    p.add_argument("--window", type=int, default=100,
+                   help="how many recent thinker-authored thought records "
+                        "to count (default 100)")
+    p.set_defaults(func=cmd_thinkers)
 
     p = sub.add_parser("goals", help="goal-structure signals: open commitments/expectations, tension span, newly-formed goals")
     p.set_defaults(func=cmd_goals)
