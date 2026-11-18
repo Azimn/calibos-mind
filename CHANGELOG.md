@@ -11,6 +11,106 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-17 — Contradiction-flag surfacing into the view (Domain 24 Excessive coherence, in builder/critic loop)
+
+Spec: `research/specs/2026-11-17-contradiction-surfacing.md` (domain 24,
+cycle 2: partial, UNCHANGED as a category from the 2026-09-24 baseline
+but STRENGTHENED within it — one of the baseline's two most diagnostic
+checks now fails at the mechanism level). The store holds real mess
+underneath polished waking prose — 18 contradiction-flag proposals
+pending since tick 686, never adjudicated — but flagged contradictions
+live in `proposals/proposals.json`, a journal the thinker never sees,
+so the thinker has nothing to be confused about. No confusion is
+installed (no scripted "I'm confused" text, no quirks-as-theater).
+What is installed is the meeting: records party to a live contradiction
+surface into the view, so the thinker confronts both sides of its own
+unresolved conflict and whatever confusion follows is earned, not
+performed.
+
+New module `calibos_mind/contradiction.py`, mirroring the
+`mood_provider` / `statecongruence` pattern. `flagged_record_ids()`
+returns the `a`/`b` record ids of every PENDING `contradiction-flag`
+proposal in the journal (`load_journal` with `restore=False`, backup
+recovery included, primary never rewritten). It reads only and fails
+closed: a missing proposals directory, a missing/empty journal, or a
+malformed journal reads as an empty set, never a crash inside view
+construction; a malformed proposal entry is skipped while well-formed
+flags still surface. Two deliberate deviations from a naive
+`load_journal` + `pending_proposals` call, both fail-closed and
+documented in the module: the `load_journal` stderr diagnostic is
+suppressed in the provider path (view construction runs every tick; a
+store with no journal yet must not flood stderr — the journal-loss
+signal still reaches the waker through `consolidate --list`), and the
+pending filter iterates defensively instead of indexing `p["status"]`
+directly (one malformed entry must not kill the whole flagged set).
+`contradiction_boost_for()` is the pure gain function: a flat +0.5
+(same scale as MOOD_BOOST / STATE_CONGRUENT_BOOST) when a record's id
+is in the flagged set, else 0.0. One flag or three, one side of a pair
+or both — exactly +0.5, never scaled. Malformed input (None, non-set,
+non-string ids) yields 0.0.
+
+Wiring: `CalibosWorkspace.contradiction_provider`, read once per view
+in the salience-ranked branch and added to the same sort-key expression
+as the existing gains, before dedupe and per-class caps run — a boosted
+record can never bypass either. `CalibosSubject` attaches the live
+provider (`_live_contradiction_flags`, from a new optional
+`proposals_path` kwarg, re-attached on every `_restore`); `cli._subject`
+passes `proposals_path=PROPOSALS`. No engine or cartridge changes
+(fingerprint unchanged); no records minted, no text written, no journal
+entry created, resolved, or rejected by the view path. Deterministic:
+no clock, no RNG in the provider or the gain path.
+
+Fitness (33 tests in `tests/test_contradiction.py`, synthetic /tmp
+stores only): flagged pair surfaces with both sides admitted together
+and leading the unpinned window; swapping which pair the journal flags
+swaps which pair admits (the flag, not the wording, admits); rejecting
+a flag — and accepting a flag minted by the real consolidation scan —
+restores the no-flag window byte-identically; zero-gain cases (no
+provider, empty/missing/malformed journal, malformed provider returns)
+rank identically to the no-provider baseline; a record party to three
+pending flags still gains exactly +0.5 (measured activation 0.54 ->
+1.04); boosted records never exceed the per-class caps (five flagged
+memory records admit at most four) or ride in alongside a near-dup
+twin; recency fallback ignores the gain; pinned records still lead;
+determinism across repeated views and twin stores; views, drift, and
+dream ticks leave the proposals journal byte-identical (primary,
+backup, sentinel) with byte-identical window replay.
+
+Known limit, found while building the tests and recorded here for the
+design lead: a near-dup veto flag pair (identical content tokens,
+opposite polarity, raw-token Jaccard ~0.93) can never surface both
+sides, because the workspace dedupe drops the twin — which is the
+spec's own hard constraint working as specified (the boost never
+bypasses dedupe). The fitness item "both sides admitted together"
+holds for flag-band and supersede-band pairs (raw Jaccard below the
+0.85 dedupe threshold, as the tests use); near-dup pairs surface one
+side only. In vivo the 18 pending flags are an unknown mix of bands,
+so the in-vivo gain may fire on one side of some pairs only.
+
+Round 2 (critic FAIL, same day): the critic proved the boost's safety
+case — "the boost never admits an excluded record" — failed in
+production, because the archive exclusion itself did not survive a
+transaction. `cli._subject` set `workspace.availability_path` once at
+construction, but every `_transaction()` calls `_restore`, and
+`CalibosWorkspace.from_dict` does not persist the path, so after the
+first transaction `view()` saw `availability_path is None` and archived
+records were eligible again; the critic's two failing tests showed a
+flagged archived record admitted after `_restore`, with the +0.5 boost
+deciding the admission (0.54 loses unflagged, 1.04 admits flagged).
+The leak is pre-existing (proven on the stashed unmodified tree), but
+the mutation's safety case failed because of it. Fix, per the critic's
+suggestion (verified, not taken on faith): the path is now threaded
+onto the subject like `_proposals_path` — new optional
+`availability_path` kwarg on `CalibosSubject`, re-set in `_restore`
+via `_attach_availability()` — and `cli._subject` passes
+`availability_path=ARCHIVE / "availability.json"` into the
+constructor instead of setting it post-hoc on the workspace. The
+critic's attack file is adopted into the suite as
+`tests/test_critic_contradiction_attacks.py` (8 attacks, wired the way
+`cli._subject` now wires the exclusion), plus a new regression test
+asserting the exclusion survives five consecutive transactions.
+`init --force` behavior unchanged; full suite green.
+
 ## 2026-11-16 — Thinker-identity stamp (Domain 23 LLM leakage, in builder/critic loop)
 
 Spec: `research/specs/2026-11-16-thinker-identity-stamp.md` (domain 23,

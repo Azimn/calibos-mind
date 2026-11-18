@@ -77,7 +77,8 @@ class CalibosSubject(EndogenousSubject):
                  familiarity_path=None, ambivalence_path=None, habits_path=None,
                  counterfactual_path=None, dormancy_path=None,
                  expectation_path=None, prediction_errors_path=None,
-                 mood_path=None, **kwargs):
+                 mood_path=None, proposals_path=None,
+                 availability_path=None, **kwargs):
         self._salience_path = salience_path
         self._interoception_path = interoception_path
         self._familiarity_path = familiarity_path
@@ -88,6 +89,8 @@ class CalibosSubject(EndogenousSubject):
         self._expectation_path = expectation_path
         self._prediction_errors_path = prediction_errors_path
         self._mood_path = mood_path
+        self._proposals_path = proposals_path
+        self._availability_path = availability_path
         self._expectation_tracker = None
         self._prediction_error_tracker = None
         self._dreaming = False
@@ -111,6 +114,19 @@ class CalibosSubject(EndogenousSubject):
         self._attach_expectation()
         self._attach_prediction_errors()
         self._attach_mood()
+        self._attach_contradiction()
+        self._attach_availability()
+
+    def _attach_availability(self):
+        # Archive exclusion (see consolidate.excluded_ids). The path is
+        # threaded onto the subject like _proposals_path and re-set on
+        # every _restore: CalibosWorkspace.from_dict builds a fresh
+        # workspace that does not persist it, so a post-hoc assignment
+        # (the old cli._subject wiring) was silently dropped by the first
+        # transaction of any process, and archived records became
+        # eligible again (critic round 2, 2026-11-17). None -> no
+        # exclusions (plain engine use).
+        self.workspace.availability_path = self._availability_path
 
     def _attach_mood(self):
         # Slow affective residue (see mood.py). The tracker constructor
@@ -127,6 +143,31 @@ class CalibosSubject(EndogenousSubject):
         # 0 by definition. No tracker, or no residue state yet, reads as
         # empty residues — zero gain, never a guessed mood.
         self.workspace.mood_provider = self._live_mood
+
+    def _attach_contradiction(self):
+        # Contradiction-flag surfacing (see contradiction.py). The
+        # provider is always attached here, so "no provider" arises only
+        # for a plain workspace, where the gain is likewise exactly 0 by
+        # definition. No proposals path, or no journal yet, reads as an
+        # empty flagged set — zero gain, never a guessed flag. The
+        # provider reads only (load_journal with restore=False);
+        # read-only commands and dream ticks never write the journal.
+        # Re-attached on every _restore like the other providers, for
+        # the same reason (a fresh workspace per transaction).
+        self.workspace.contradiction_provider = self._live_contradiction_flags
+
+    def _live_contradiction_flags(self) -> set[str]:
+        """Record ids party to a pending contradiction-flag proposal.
+
+        Reads the proposals journal at view time (read-only, restore=False
+        — see contradiction.flagged_record_ids). No proposals path ->
+        empty set. A missing/malformed journal reads as an empty set,
+        never a crash inside view construction.
+        """
+        from .contradiction import flagged_record_ids
+        if self._proposals_path is None:
+            return set()
+        return flagged_record_ids(self._proposals_path)
 
     def _attach_dormancy(self):
         # Authored-habit dormancy demotion (see authored_dormancy.py). The
@@ -398,6 +439,8 @@ class CalibosSubject(EndogenousSubject):
         self._attach_expectation()
         self._attach_prediction_errors()
         self._attach_mood()
+        self._attach_contradiction()
+        self._attach_availability()
         # from_dict builds a fresh CalibosWorkspace, dropping ad-hoc
         # attributes — re-set the display name (see __init__).
         self.workspace.display_name = self._resolve_display_name()

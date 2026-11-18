@@ -127,7 +127,15 @@ def _subject(provider=None):
                              dormancy_path=DORMANCY,
                              expectation_path=EXPECTATIONS,
                              prediction_errors_path=PREDICTION_ERRORS,
-                             mood_path=MOOD)
+                             mood_path=MOOD,
+                             proposals_path=PROPOSALS,
+                             # Archived records stay in history but leave
+                             # cognition views; the journal starts empty so
+                             # this changes nothing until something is
+                             # accepted or quarantined. Threaded onto the
+                             # subject (not set post-hoc on the workspace)
+                             # so it survives every _restore.
+                             availability_path=ARCHIVE / "availability.json")
     if isinstance(provider, InboxCognition):
         # Stamp queued prompts with the store tick and record sequence at
         # queue time, so `mind answer` can refuse superseded views.
@@ -142,10 +150,6 @@ def _subject(provider=None):
         # rebuilt from the DB payload every transaction, so an eager
         # capture would stamp dead ids.
         provider.track_view_ids(lambda: subject.workspace._last_view_ids)
-    # Archived records stay in history but leave cognition views; the
-    # journal starts empty so this changes nothing until something is
-    # accepted or quarantined.
-    subject.workspace.availability_path = ARCHIVE / "availability.json"
     return subject
 
 

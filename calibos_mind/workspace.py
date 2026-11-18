@@ -40,6 +40,7 @@ from jelly_psiduck.workspace import (
 )
 
 from .consolidate import excluded_ids
+from .contradiction import contradiction_boost_for
 from .familiarity import FAMILIARITY_WINDOW
 from .mood import mood_residue_boost_for
 from .selfgain import self_boost_for
@@ -311,12 +312,20 @@ class CalibosWorkspace(SubjectiveWorkspace):
     # None -> no mood state, the gain is exactly 0 (the defined
     # zero-gain case, not a silent default).
     mood_provider = None
+    # Callable returning the set of record ids party to a PENDING
+    # contradiction-flag proposal (see calibos_mind/contradiction.py).
+    # Attached by CalibosSubject from the proposals journal, read once
+    # per view like mood_provider. None -> no flagged records, the gain
+    # is exactly 0 (the defined zero-gain case, not a silent default).
+    contradiction_provider = None
     # Attached by CalibosSubject when a mood sidecar path is configured.
     # None -> no residue state (plain engine behavior).
     mood_tracker = None
     # Path to the consolidation availability journal (archive/availability.json).
     # Records listed there are archived: history, never deleted, but excluded
     # from cognition views. None -> no exclusions (e.g. plain engine use).
+    # Set by CalibosSubject in __init__ and re-set in _restore (from_dict
+    # builds a fresh instance, dropping ad-hoc attributes).
     availability_path = None
     # Attached by CalibosSubject when an interoception sidecar path is
     # configured. None -> interoception records pass through untouched.
@@ -390,6 +399,14 @@ class CalibosWorkspace(SubjectiveWorkspace):
                 mood_residues, mood_fast = mood_state
             else:
                 mood_residues, mood_fast = None, None
+            # Contradiction-flag surfacing (Domain 24): read once per
+            # view, like the mood state above. A malformed provider
+            # return reads as no flagged records — the gain function
+            # itself is also malformed-safe, so a bad provider can never
+            # break view construction.
+            contradiction_provider = self.contradiction_provider
+            flagged_ids = (contradiction_provider()
+                           if contradiction_provider is not None else None)
             now_tick = max((r.tick for r in rest), default=0)
             ranked = sorted(
                 rest,
@@ -411,7 +428,14 @@ class CalibosWorkspace(SubjectiveWorkspace):
                     # purely additive, same discipline as the gains above.
                     # Fires only for a settled pressure with an elevated
                     # residue, so it cannot duplicate the live-spike gain.
-                    + mood_residue_boost_for(r, mood_residues, mood_fast),
+                    + mood_residue_boost_for(r, mood_residues, mood_fast)
+                    # Contradiction-flag retrieval gain (Domain 24):
+                    # flat, purely additive, same discipline as the gains
+                    # above. Fires for a record party to a pending
+                    # contradiction-flag proposal, so the thinker meets
+                    # both sides of its own unresolved conflict.
+                    # flagged_ids None -> exactly 0 (defined zero-gain).
+                    + contradiction_boost_for(r, flagged_ids),
                     r.tick),
                 reverse=True,
             )
