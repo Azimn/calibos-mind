@@ -1181,6 +1181,13 @@ def cmd_status(args):
     eng = state["engine"]
     inbox_n = len(list(INBOX.glob("prompt-*.json")))
     print(f"tick {eng['tick']} | inbox {inbox_n} waiting | pending events {len(state['pending'])}")
+    from .deferrals import (SOCIAL_LOAD_WINDOW, social_contact_count,
+                            social_load)
+    _social_term = social_load(state["workspace"]["records"], eng["tick"])
+    _social_count = social_contact_count(state["workspace"]["records"],
+                                         eng["tick"])
+    print(f"social load {_social_term:.2f} ({_social_count} contact "
+          f"events / {SOCIAL_LOAD_WINDOW} ticks)")
     tracker = subject.workspace.interoception_tracker
     if args.raw or tracker is None:
         # --raw: exact need floats, diagnostics only. Without a tracker there
@@ -1900,22 +1907,26 @@ def _deferral_tracker():
 
 
 def _deferral_weariness(subject) -> float:
-    """Current weariness: body + open load, one number.
+    """Current weariness: body + open load + social saturation, one number.
 
     The body term is the existing friction machinery on the engine's
     needs; the load term counts open commitments, pending
-    expectations, and prompts waiting in the inbox. Computed live at
-    defer time, never stored.
+    expectations, and prompts waiting in the inbox; the social term
+    counts contact events (answered prompts, social-source records)
+    in the trailing window, computed live from the workspace records
+    at defer time. Computed live, never stored.
     """
-    from .deferrals import weariness
+    from .deferrals import social_load, weariness
     state = subject.inspect()["continuity"]
     open_comms = sum(1 for c in state["commitments"].values()
                      if c["status"] in {"open", "overdue"})
     open_exps = sum(1 for e in state["expectations"].values()
                     if e["status"] == "pending")
     inbox_n = len(list(INBOX.glob("prompt-*.json")))
+    social = social_load(subject.workspace.records,
+                         subject.engine.state.tick)
     return weariness(dict(subject.engine.state.needs),
-                     open_comms, open_exps, inbox_n)
+                     open_comms, open_exps, inbox_n, social=social)
 
 
 def _resolve_reminder(subject, reminder_id, *, released, outcome, tick):

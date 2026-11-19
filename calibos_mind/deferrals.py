@@ -34,10 +34,14 @@ Design rules (mirroring goals.py / personality.py):
   ``mind bucket`` commands are the inhabitant's own management
   interface, used during wakes — not a parent settings panel.
 - Weariness reuses the existing friction machinery (``friction.weariness``
-  on the body's needs) and takes the larger of that and a load term from
-  open commitments + pending expectations + inbox depth. There is one
-  weariness, not two: this module composes the existing one, it does not
-  invent a parallel concept.
+  on the body's needs) and takes the larger of that, a load term from
+  open commitments + pending expectations + inbox depth, and a social
+  term from trailing-window contact events (``social_load``: answered
+  prompts and social-source records). There is one weariness, not two:
+  this module composes the existing one, it does not invent a parallel
+  concept. Saturation then emerges as deferral through the existing
+  buckets, escalation, and revisit machinery — no scripted unwillingness
+  is installed anywhere.
 - Time base is engine ticks. The revisit window is configured in hours
   and converted with TICKS_PER_HOUR = 0.5: one tick is treated as two
   hours of lived time, anchored to the wake cadence (``mind heartbeat
@@ -129,6 +133,18 @@ GATE_CAP = 0.95
 #: load term saturates at 1.0.
 LOAD_SCALE = 10
 
+#: Trailing window (ticks) for the social-saturation load term.
+#: Calibration (live store, 2026-11-18): 250 contact events over 1183
+#: ticks, trailing-50-tick count mean 10.17, p95 17, max 22.
+SOCIAL_LOAD_WINDOW = 50
+
+#: Contact events at or below this count in the window: no saturation.
+SOCIAL_LOAD_BASELINE = 10
+
+#: Contact events above baseline per unit of saturation; the term
+#: reaches 1.0 at baseline + scale events (22 at the defaults).
+SOCIAL_LOAD_SCALE = 12
+
 #: The only urgency values a prompt may carry. High urgency is never
 #: deferred on weariness alone.
 URGENCIES = ("low", "high")
@@ -164,23 +180,99 @@ def default_bucket_config(name: str) -> dict:
     }
 
 
+def _record_fields(rec):
+    """(tick, generated_by, source) from a record dict or object.
+
+    Mirrors attribution._fields: workspace records are objects in
+    memory and dicts after inspect(); either shape reads the same.
+    Missing fields read as None, never a crash.
+    """
+    if isinstance(rec, dict):
+        return rec.get("tick"), rec.get("generated_by"), rec.get("source")
+    return (getattr(rec, "tick", None),
+            getattr(rec, "generated_by", None),
+            getattr(rec, "source", None))
+
+
+def social_contact_count(records, tick,
+                         window=SOCIAL_LOAD_WINDOW) -> int:
+    """Contact events in the trailing window ``(tick - window, tick]``.
+
+    A contact event is a record whose ``generated_by`` starts with
+    ``"answered:"`` (an answered prompt) or whose ``source`` is
+    ``"social"``. The window boundary is exact: an event at
+    ``tick - window`` is excluded, at ``tick - window + 1`` included,
+    at ``tick`` included, future ticks excluded. Malformed records
+    (missing/None/non-int tick, missing ``generated_by``/``source``)
+    count as non-contact, never a crash. Pure: no clock, no RNG, no
+    writes. ``records`` may be None (an empty store reads as zero).
+    """
+    if not _is_int(tick):
+        raise ValueError(f"social_contact_count needs an int tick, "
+                         f"got {tick!r}")
+    if not _is_int(window) or window < 1:
+        raise ValueError(f"social_contact_count needs a window >= 1, "
+                         f"got {window!r}")
+    lo = tick - window
+    count = 0
+    for rec in records or []:
+        rtick, generated_by, source = _record_fields(rec)
+        if not _is_int(rtick):
+            continue
+        if not (lo < rtick <= tick):
+            continue
+        if source == "social":
+            count += 1
+        elif isinstance(generated_by, str) \
+                and generated_by.startswith("answered:"):
+            count += 1
+    return count
+
+
+def social_load(records, tick, window=SOCIAL_LOAD_WINDOW,
+                baseline=SOCIAL_LOAD_BASELINE,
+                scale=SOCIAL_LOAD_SCALE) -> float:
+    """0.0 (ordinary rhythm) .. 1.0 (socially saturated) load term.
+
+    ``clamp((count - baseline) / scale, 0.0, 1.0)`` over the trailing
+    window: 0.0 at count <= 10, 0.5 at 16, 1.0 at >= 22 (defaults).
+    The term is ~0 at the ordinary contact rhythm and reaches 1.0
+    only near the historical max, so ordinary days never saturate
+    the deferral gate. Pure and deterministic: identical record
+    sequences yield identical terms.
+    """
+    if not _is_int(baseline) or baseline < 0:
+        raise ValueError(f"social_load needs a baseline >= 0, "
+                         f"got {baseline!r}")
+    if not _is_num(scale) or scale <= 0:
+        raise ValueError(f"social_load needs a scale > 0, "
+                         f"got {scale!r}")
+    count = social_contact_count(records, tick, window)
+    return min(1.0, max(0.0, (count - baseline) / scale))
+
+
 def weariness(needs: dict, open_commitments: int = 0,
-              open_expectations: int = 0, inbox_depth: int = 0) -> float:
-    """0.0 (rested) .. 1.0 (exhausted), from body + open load.
+              open_expectations: int = 0, inbox_depth: int = 0,
+              social: float = 0.0) -> float:
+    """0.0 (rested) .. 1.0 (exhausted), from body + open load + social.
 
     The body term is the existing friction machinery
     (``friction.weariness`` on focus/fatigue). The load term is the
     count of open commitments, pending expectations, and waiting inbox
-    prompts, saturating at LOAD_SCALE. The larger of the two wins:
-    either a worn body or a full plate can gate a deferral. One
-    weariness, composed — not a second weariness invented alongside
-    the first.
+    prompts, saturating at LOAD_SCALE. The social term is the
+    trailing-window contact load (``social_load``): how much contact
+    the organism has actually had recently. The largest of the three
+    wins: either a worn body, a full plate, or a socially saturated
+    stretch can gate a deferral. One weariness, composed — not a
+    second weariness invented alongside the first. The default
+    ``social=0.0`` preserves every existing caller exactly.
     """
     body = friction.weariness(needs)
     load = max(0, open_commitments) + max(0, open_expectations) \
         + max(0, inbox_depth)
     load_term = min(1.0, load / LOAD_SCALE)
-    return max(body, load_term)
+    social_term = min(1.0, max(0.0, social))
+    return max(body, load_term, social_term)
 
 
 def _window_ticks(window_hours) -> tuple[int, int]:

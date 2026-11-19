@@ -11,6 +11,61 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-18 — Social-saturation load term in the deferral gate (Domain 25 Excessive responsiveness, in builder/critic loop)
+
+Spec: `research/specs/2026-11-18-social-saturation-load.md` (domain 25,
+cycle 2: partial, UNCHANGED as a category from the 2026-09-24 baseline
+— first per-check scoring for this domain). Of 10 checks scored against
+the live store at tick 1183: 0 addressed, 4 partial, 6 absent. The most
+diagnostic absence: no saturation mechanism at all — the loneliness need
+plus formed:loneliness:seek_contact at 0.7 means social seeking only
+grows, and the deferrals.py load term counts open items, not contact.
+
+No scripted unwillingness is installed (no "I don't want to talk" lines,
+no quirks-as-theater). What is installed is a real state variable:
+social load — how much contact the organism has actually had recently —
+composed into the one weariness the deferral gate already uses, so
+saturation emerges as deferral through the existing buckets, escalation,
+and revisit machinery instead of being performed.
+
+`social_load(records, tick, window=50, baseline=10, scale=12)` in
+`calibos_mind/deferrals.py` counts contact events (records whose
+`generated_by` starts with `answered:` or whose `source` is `social`)
+in the trailing window, `clamp((count - baseline) / scale, 0.0, 1.0)`:
+0.0 at count <= 10, 0.5 at 16, 1.0 at >= 22. Calibration is measured
+live, not guessed: 250 contact events over 1183 ticks, trailing-50
+count mean 10.17, p95 17, max 22, current window 17 — so the term is
+~0 at the ordinary rhythm and reaches 1.0 only near the historical
+max. Window boundaries are exact (tick-window excluded, tick-window+1
+and tick included, future ticks excluded); malformed records count as
+non-contact, never a crash; dict and object record shapes both read.
+`weariness()` gains an optional `social=0.0` kwarg; effective weariness
+is the max of body, load, and social terms, and the default preserves
+every existing caller exactly. `_deferral_weariness()` in `cli.py`
+computes the term live from `subject.workspace.records` at defer time
+and passes it in — computed live, never stored, no new sidecar, no
+store write, no engine or cartridge change (fingerprint unchanged).
+`mind status` prints one line, e.g. `social load 0.58 (17 contact
+events / 50 ticks)`; an empty store reports 0.00 / 0 events. The
+high-urgency guard ("high urgency is never deferred on weariness
+alone") is preserved untouched and verified through the `cmd_defer`
+path at high social load.
+
+Scope limit, stated plainly: deferral is waker-invoked (`mind defer`);
+`mind answer` has no weariness check. This puts the saturation signal
+into the gate the waker uses when deciding whether a deferral is
+warranted. It does not give the organism autonomous refusal; the
+organism's "I don't feel like talking" remains waker-mediated — a real
+boundary for a future domain pass, not something this change pretends
+to fix.
+
+Tests: `tests/test_social_load.py`, 10 tests covering every numbered
+fitness item (zero-contact, calibration points, window boundaries,
+only-contact-counts incl. malformed records and both record shapes,
+three-term composition, end-to-end gate deciding on the social term,
+high-urgency refusal, read-only/dream isolation scoped per the
+regression genome, status line). Full suite green: 1244 passed.
+
 ## 2026-11-17 — Contradiction-flag surfacing into the view (Domain 24 Excessive coherence, in builder/critic loop)
 
 Spec: `research/specs/2026-11-17-contradiction-surfacing.md` (domain 24,
