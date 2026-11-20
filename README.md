@@ -47,6 +47,7 @@ always a valid answer.
     ./mind status [--raw]            # tick, felt need bands (exact floats under --raw), open loops, inbox depth
     ./mind review [n]                # recent private thoughts
     ./mind drift [--window N]        # persona-drift signals (read-only)
+    ./mind relationships             # contact gap per relationship, staleness flag past 500 ticks (read-only)
     ./mind consolidate [--list]      # dry-run consolidation scan (read-only); proposals to journal
     ./mind consolidate --accept <id>...      # accept proposal(s): archive losers with written reasons
     ./mind consolidate --reject <id> --reason "..."   # reject a proposal (reason kept)

@@ -11,6 +11,80 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-19 — photopia_play.py refuses to overwrite an existing save
+
+`~/workspace/bin/photopia_play.py` now exits 2 with a clear message when the
+save path already exists, instead of running the session and letting the
+dfrotz "Overwrite existing file?" prompt silently eat the save. Cause found
+during this wake's step-5 session: the photopia-20261119j.qzl save recorded
+in the mind's perceptions never landed on disk, because an earlier session
+had already created that filename; the overwrite prompt consumed the save
+and the note recorded a save that did not exist. The on-disk thread had to
+be replayed from photopia-20261119i.qzl (huge tread). Fresh-name-per-run is
+now enforced by the driver itself, not just by convention.
+
+## 2026-11-19 — Relationship contact-gap instrument (Domain 26 State reset artifacts, in builder/critic loop)
+
+Spec: `research/specs/2026-11-19-relationship-contact-gap.md` (domain 26,
+first per-check scoring for this domain). Of the domain's checks scored
+against the live store at tick 1199, check 4 ("relationship tension
+vanishes after enough turns") scored ABSENT — and worse than the check
+states: no tension state exists at all. All 3 live relationships carry
+identical template values (trust 0.32, comfort 0.28, respect 0.35,
+attachment 0.12, familiarity 0.055, uncertainty 1.0), differing only in
+`last_contact_tick` (143 / 533 / 670) and tiny interest jitter. Last
+contact is up to 1056 ticks stale with no consequence anywhere in the
+system, and no relationship-update code exists in `calibos_mind/` —
+relationships are engine-owned (frozen engine), so the wrapper-layer
+move is to instrument first.
+
+No tension, no scripted staleness penalty, no behavior change is
+installed. What is installed is a read-only reporting instrument in the
+style of `mind drift`: `mind relationships` reports, for every
+relationship in the store, the person id, ticks since last contact
+(current tick minus `last_contact_tick`), familiarity, and a staleness
+flag when the gap exceeds `STALE_AFTER = 500` ticks (the scale of the
+live gap that currently passes unnoticed: the live stale relationship
+sits at 1056). Computed from the store on every invocation; no new
+sidecar, no new stored state, no writes of any kind, no engine or
+cartridge change (fingerprint unchanged).
+
+`relationships_report(state)` in the new `calibos_mind/relationships.py`
+builds the full report before anything is printed, so a malformed store
+raises before any partial report. Fail-loud discipline per the
+regression genome: non-numeric or missing familiarity, non-integer,
+negative, or future `last_contact_tick`, non-dict relationship values,
+or a missing `engine`/`relationships` section all raise `ValueError`; the one honest
+undefined is a missing `last_contact_tick`, which reports gap undefined
+for that row and is never flagged stale (never a quiet zero). Rows are
+sorted by person id; an empty relationships dict reports "no
+relationships". Boundary is exact: gap 500 does not flag, gap 501 does.
+`mind relationships` appears in `--help` alongside the other read-only
+reporting commands, and in the README command list.
+
+Read-only verified at the strongest scope the genome allows: invoking
+the command twice on a synthetic store yields byte-identical output,
+the canonical payload content is unchanged, the raw SQLite payload
+string is byte-identical, and no file under the store tree is created
+or changed (the SQLite file's own bytes still move on CLI construction,
+as the genome records — that is construction, not this command).
+Assess after 2026-12-03.
+
+Fix round 2 (same day): critic round 1 caught a negative
+`last_contact_tick` passing silently (gap computed as tick minus a
+negative, larger than the tick itself, with no complaint). The
+future-tick check is now a range check, 0..tick, and the critic's two
+attack tests stay as regression coverage.
+
+Fix round 3 (same day, final round): critic round 2 caught a negative
+engine tick passing silently whenever no relationship row triggered the
+per-row range check — empty relationships, or rows all missing their
+`last_contact_tick` stamp — including through the CLI (`mind
+relationships` printed a report headed "tick -1"). `relationships_report`
+now rejects `tick < 0` with ValueError immediately after the engine-tick
+type check, before any row is examined. The critic's three round-2
+attack tests stay as regression coverage.
+
 ## 2026-11-18 — Social-saturation load term in the deferral gate (Domain 25 Excessive responsiveness, in builder/critic loop)
 
 Spec: `research/specs/2026-11-18-social-saturation-load.md` (domain 25,
@@ -5346,3 +5420,31 @@ The autouse fixture exposed two latent issues (full suite: 828 passed,
    (nonexistent) dormancy file. Extended the helper to the complete path
    set; each scenario now gets genuine per-scenario isolation, which is
    what the test's store-unchanged assertion always intended.
+
+## 2026-11-20 — photopia_play.py: fail loudly on silent restore/save loss
+
+During the night's blind Photopia thread the play chain broke silently
+twice over: a dialogue menu ate the `save` command, so
+photopia-20261120i.qzl never landed on disk, and the next run then
+restored a nonexistent file, which dfrotz answered by starting a FRESH
+game with no warning — photopia-20261120k.qzl holds that fresh-game
+landing site, not the beach thread. The beach thread was repaired from
+photopia-20261120h.qzl (front yard, Alley's Olbers question answered with
+the inverse square law, then solar radiation and neutrinos); live head is
+now photopia-20261120m.qzl, k.qzl is a dead fresh-game branch.
+
+Driver changes (`~/workspace/bin/photopia_play.py`):
+
+1. Refuses a missing restore file (exit 2) instead of letting dfrotz
+   silently restart the game.
+2. Echoes the restore exchange into the transcript, so the room text it
+   returns is visible evidence the restore landed where expected.
+3. After the session, verifies the save file exists and is non-empty;
+   on failure prints a loud stderr error and exits 3 instead of leaving
+   a gap the next run restores over.
+
+Fitness: the new save check proved itself on the first retry, catching a
+menu-eaten save immediately (exit non-zero, no misleading file written);
+the repaired run then answered Alley's follow-up and saved cleanly.
+Revert signal: any run where a legitimate save legitimately produces an
+empty file (none known — a real save always writes state).

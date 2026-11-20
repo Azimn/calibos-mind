@@ -32,6 +32,7 @@ indefinitely. Quick reference:
     mind status [--raw]              tick, felt need bands (exact floats under --raw), open loops, inbox depth
     mind review [n]                    recent private thoughts
     mind drift [--window N]            persona-drift signals (grown salience share, trigger KL)
+    mind relationships                   contact gap per relationship, staleness flag past 500 ticks (read-only)
     mind goals                           goal-structure signals: open commitments/expectations, tension span, newly-formed goals
     mind followthrough                   realization follow-through: whether recorded realizations are followed by conduct change (read-only)
     mind predictions                     prediction-error traces: counts, trace rate over the last 100 prediction-carrying events, recent + largest errors (read-only)
@@ -1760,6 +1761,34 @@ def cmd_drift(args):
     return 0
 
 
+def cmd_relationships(args):
+    """Relationship contact-gap report (Domain 26): ticks since last
+    contact per relationship, with a staleness flag past STALE_AFTER.
+
+    Read-only: the report is computed from one inspect() snapshot and
+    printed only after it is built in full, so a malformed store raises
+    before any partial report. Never writes the store or any sidecar.
+    """
+    from .relationships import STALE_AFTER, relationships_report
+    subject = _subject()
+    rep = relationships_report(subject.inspect())
+    print(f"relationships (tick {rep['tick']}, stale after "
+          f"{STALE_AFTER} ticks) — read-only")
+    if not rep["rows"]:
+        print("  no relationships")
+        return 0
+    for row in rep["rows"]:
+        if row["gap"] is None:
+            print(f"  {row['person']}: gap undefined (no recorded contact), "
+                  f"familiarity {row['familiarity']:.4f}")
+        else:
+            stale = " STALE" if row["stale"] else ""
+            print(f"  {row['person']}: gap {row['gap']} ticks "
+                  f"(last contact tick {row['last_contact_tick']}), "
+                  f"familiarity {row['familiarity']:.4f}{stale}")
+    return 0
+
+
 def cmd_goals(args):
     """Goal-structure report (Domain 17): the live goal population.
 
@@ -2526,6 +2555,10 @@ def main(argv=None):
     p.add_argument("--window", type=int, default=10,
                    help="recent-trigger window size for the KL (default 10)")
     p.set_defaults(func=cmd_drift)
+
+    p = sub.add_parser("relationships", help="relationship contact gaps: ticks since last contact per person, staleness flag past 500 ticks (read-only)",
+                       description="Report ticks since last contact per relationship, with a staleness flag when the gap exceeds 500 ticks. Read-only: computed from the store on every invocation, no writes.")
+    p.set_defaults(func=cmd_relationships)
 
     p = sub.add_parser("thinkers", help="thinker-identity counts over recent "
                                          "thinker-authored thoughts (read-only)")
