@@ -484,9 +484,10 @@ def test_wiring_records_engine_action_per_tick():
             subject, _needs(curiosity=0.80), _pressures(), _baselines())["action"])
     assert set(actions) == {"explore"}, actions
     data = _sidecar_data(cli.FOLLOWTHROUGH)
-    assert len(data) == 5
-    assert [r[1] for r in data] == ["explore"] * 5
-    assert [r[0] for r in data] == [1, 2, 3, 4, 5], data
+    assert len(data["log"]) == 5
+    assert [r[1] for r in data["log"]] == ["explore"] * 5
+    assert [r[0] for r in data["log"]] == [1, 2, 3, 4, 5], data
+    assert data["surfaced"] == []
 
 
 # -- fitness 10: determinism ---------------------------------------------------------
@@ -514,8 +515,9 @@ def test_identical_scripts_yield_byte_identical_sidecar():
     b = _run_script(_tmp(), ticks=12)
     assert a == b, (a, b)
     data = json.loads(a)
-    assert len(data) == 12
-    assert [r[0] for r in data] == list(range(1, 13))
+    assert len(data["log"]) == 12
+    assert [r[0] for r in data["log"]] == list(range(1, 13))
+    assert data["surfaced"] == []
 
 
 # -- CLI report output ----------------------------------------------------------------

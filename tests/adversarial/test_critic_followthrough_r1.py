@@ -304,7 +304,8 @@ def test_critic_tick_restart_writes_poison_then_next_tick_refuses():
     restarted = FollowthroughTracker(path)
     assert restarted.observe(1, "approach") is True  # no guard here
     restarted.save()
-    assert json.loads(path.read_text(encoding="utf-8"))[-1] == [1, "approach"]
+    assert json.loads(path.read_text(encoding="utf-8"))["log"][-1] == \
+        [1, "approach"]
     with pytest.raises(ValueError, match="out of order"):
         FollowthroughTracker(path)
 

@@ -499,6 +499,20 @@ def _run_tick(subject):
     # write discipline, mirroring familiarity/personality).
     if ftracker.observe(result["tick"], result.get("action")):
         ftracker.save()
+    # Realization follow-through surfacing (domain 27, 2026-11-20): a
+    # realization whose before/after windows have completed mints
+    # exactly one temporal record summarizing the measured conduct
+    # change, so the thinker can encounter its own measured
+    # past-vs-present comparison in a later view. The summary is
+    # factual only — no interpretation, no promise, no judgment.
+    # Waking ticks only — _run_tick never serves dream ticks, and
+    # read-only commands never tick, so neither can mint. Crash
+    # discipline mirrors the dormancy demotion note: the owed mark is
+    # durable in the sidecar before the mint transaction commits, the
+    # mint is idempotent on (need, swing_tick, conv_tick), and the ack
+    # clears the mark only after the mint commits.
+    from .followthrough import surface_newly_measurable
+    surface_newly_measurable(subject, ftracker)
     # Goal-structure feed: snapshot the live goal population for this
     # waking tick. Every tick records a row, even a zero-open tick (a
     # zero resets the tension run and is data, not an absence), so the

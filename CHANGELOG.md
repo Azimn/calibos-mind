@@ -11,6 +11,64 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-20 — Realization follow-through surfacing into the view (Domain 27, check 9)
+
+Spec: `research/specs/2026-11-20-followthrough-surfacing.md`. Domain 27
+check 9 was partial: the follow-through comparison was computed (`mind
+followthrough` reported it, and the first measurable row landed today:
+thirst swing 1177 conv 1185, tv 0.15), but nothing rendered it into the
+thinker's view. Now, when a realization's before/after windows complete,
+the waking-tick path mints exactly one temporal record summarizing the
+measured conduct change — need, swing tick, convergence tick, felt band,
+actual band, before/after action mixes, tv distance — factual only, no
+interpretation, no promise, no judgment. The record is a normal
+cognition-authored store record, so it enters salience ranking like any
+record and the thinker can encounter its own measured past-vs-present
+comparison in a later view.
+
+Mechanism (`calibos_mind/followthrough.py`, `cli._run_tick` after the
+follow-through tick feed): `surface_newly_measurable()` reads the current
+report, mints one summary per newly-measurable row, and records the
+realization identity in a persisted `surfaced` set in
+`followthrough.json`. Crash discipline mirrors the dormancy demotion
+note: an `owed` mark saves BEFORE the mint transaction commits, the
+mint is idempotent on (need, swing tick, convergence tick), and the ack
+clears the mark only after the mint commits. A kill anywhere in the
+window recovers on the next waking tick with exactly one record. An
+owed mark whose windows evaporated under the 256-row log cap before
+recovery is dropped without minting — there is no measurement left to
+truthfully summarize. The summary text is a canonical serialization
+(prose sentence with per-action deltas plus a machine sentence with
+the full mixes at six decimals), parsed by one anchored fullmatch that
+checks prose/machine agreement on need, swing, convergence, tv, and
+every delta clause. Read-only commands and dream ticks never surface
+and never write the sidecar; minting never advances the engine tick
+or alters the trace; `init --force` wipes the surfaced set with the
+sidecar.
+
+Sidecar format change: `followthrough.json` is now
+`{"log": [...], "surfaced": [...]}` (was a bare list), saved atomically
+(temp file + os.replace + fsync). A bare-list file still loads as a log
+with an empty surfaced set and migrates on the next save, so the live
+log (81 rows at deploy) survives the upgrade; a read-only load leaves
+its bytes untouched. Fail-loud discipline (critic round 2): an explicit
+JSON null for "log" or "surfaced" raises `ValueError("corrupt
+followthrough sidecar ...")` — only a *missing* "surfaced" key defaults
+to empty. No engine or cartridge change — the store
+fingerprint is unchanged.
+
+Tests: new `tests/test_followthrough_surfacing.py` (21 tests: wiring
+through `_run_tick`, mixed-distribution exactness, insufficient-window
+and swing>conv silence, two-realizations-same-tick, mint idempotence,
+both crash windows, stale-owed drop, full read-only sweep including
+wake briefing / think / dream command, dream-tick isolation,
+determinism, `init --force` wipe, tick/trace identity, cartridge
+fingerprint, text round-trip and tamper rejections, legacy migration,
+corrupt surfaced entries, no feedback loop). Two existing tests
+updated for the dict shape (`tests/test_followthrough.py` wiring and
+determinism assertions; `tests/adversarial/test_critic_followthrough_r1.py`
+tick-restart poison assertion). Full suite green.
+
 ## 2026-11-19 — photopia_play.py refuses to overwrite an existing save
 
 `~/workspace/bin/photopia_play.py` now exits 2 with a clear message when the

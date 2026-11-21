@@ -32,326 +32,6 @@
    "oldest_open_age": null,
    "open": 0,
    "open_expectations": 0,
-   "tick": 1113
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1114
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1115
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1116
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1117
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1118
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1119
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1120
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1121
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1122
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1123
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1124
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1125
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1126
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1127
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
-   "tick": 1128
-  },
-  {
-   "commitments": {
-    "broken": 0,
-    "kept": 2,
-    "open": 0,
-    "overdue": 0,
-    "released": 0
-   },
-   "due_soon": 0,
-   "expectations": {
-    "confirmed": 21,
-    "expired": 0,
-    "pending": 0,
-    "violated": 0
-   },
-   "oldest_open_age": null,
-   "open": 0,
-   "open_expectations": 0,
    "tick": 1129
   },
   {
@@ -2013,6 +1693,326 @@
    "open": 0,
    "open_expectations": 0,
    "tick": 1212
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1213
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1214
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1215
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1216
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1217
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1218
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1219
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1220
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1221
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1222
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1223
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1224
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1225
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1226
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1227
+  },
+  {
+   "commitments": {
+    "broken": 0,
+    "kept": 2,
+    "open": 0,
+    "overdue": 0,
+    "released": 0
+   },
+   "due_soon": 0,
+   "expectations": {
+    "confirmed": 24,
+    "expired": 0,
+    "pending": 0,
+    "violated": 0
+   },
+   "oldest_open_age": null,
+   "open": 0,
+   "open_expectations": 0,
+   "tick": 1228
   }
  ],
  "tension": {
