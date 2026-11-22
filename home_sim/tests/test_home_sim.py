@@ -372,7 +372,9 @@ class TestEventsAndDigest(unittest.TestCase):
                        provenance="simulated")
             d = summarize_night(log.read_all())
             self.assertIn("simulated", d)
-            self.assertIn("eat x1", d)
+            self.assertIn("I eat the meal I prepared.", d)
+            self.assertNotIn("did:", d)
+            self.assertNotRegex(d, r" x\d+")
 
     def test_empty_digest(self):
         self.assertIn("simulated", summarize_night([]))
@@ -436,9 +438,21 @@ class TestHardBoundary(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_import_pulls_no_mind_package(self):
-        self.assertTrue(all(not m.startswith("calibos_mind")
-                            for m in sys.modules),
-                        "home_sim pulled calibos_mind into sys.modules")
+        # Order-independent: check in a fresh interpreter, since other
+        # test modules in a full-suite run legitimately import
+        # calibos_mind into this process first. The property under test
+        # is that importing home_sim alone does not pull the mind
+        # package in.
+        import subprocess
+        code = ("import home_sim, sys; "
+                "assert not any(m.startswith('calibos_mind') "
+                "for m in sys.modules), "
+                "'home_sim pulled calibos_mind into sys.modules'")
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(PACKAGE_DIR.parent),
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class TestStatePersistence(unittest.TestCase):
@@ -485,17 +499,21 @@ class TestDigestPerNight(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             h1 = Home(tmp, seed=1, night_date="2026-10-19")
             h1.run(max_minutes=480)
-            n1 = len(h1.log.read_night("2026-10-19"))
+            # Simulated moments only: the night's log also carries the
+            # world's gift (quoted separately in the digest), and the
+            # closing count is simulated moments.
+            n1 = len([r for r in h1.log.read_night("2026-10-19")
+                      if r.get("provenance") == "simulated"])
             self.assertGreater(n1, 0)
             h2 = Home(tmp, seed=2)  # rolls to 2026-10-20
             h2.run(max_minutes=480)
             n2 = len(h2.log.read_night("2026-10-20"))
             self.assertGreater(n2, 0)
             d = h2.digest()
-            did = next(l for l in d.splitlines()
-                       if l.strip().startswith("did:"))
-            total = sum(int(n) for n in re.findall(r"x(\d+)", did))
-            self.assertEqual(total, n2)
+            self.assertIn("the night of 2026-10-20", d)
+            self.assertNotIn("2026-10-19", d)
+            count = int(re.search(r"(\d+) moments in all", d).group(1))
+            self.assertEqual(count, n2)
 
     def test_digest_after_rollforward_shows_completed_night(self):
         """A morning read after the state rolled forward must digest the
@@ -505,16 +523,19 @@ class TestDigestPerNight(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             h1 = Home(tmp, seed=1, night_date="2026-10-19")
             h1.run(max_minutes=480)
-            n1 = len(h1.log.read_night("2026-10-19"))
+            # Simulated moments only: the night's log also carries the
+            # world's gift (quoted separately in the digest), and the
+            # closing count is simulated moments.
+            n1 = len([r for r in h1.log.read_night("2026-10-19")
+                      if r.get("provenance") == "simulated"])
             self.assertGreater(n1, 0)
             h2 = Home(tmp, seed=2)  # rolls to 2026-10-20, no run yet
             self.assertEqual(h2.state["night_date"], "2026-10-20")
             d = h2.digest()
             self.assertNotIn("no off-hours activity", d)
-            did = next(l for l in d.splitlines()
-                       if l.strip().startswith("did:"))
-            total = sum(int(n) for n in re.findall(r"x(\d+)", did))
-            self.assertEqual(total, n1)
+            self.assertIn("the night of 2026-10-19", d)
+            count = int(re.search(r"(\d+) moments in all", d).group(1))
+            self.assertEqual(count, n1)
 
 
 class TestValidateStrict(unittest.TestCase):

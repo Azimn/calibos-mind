@@ -11,6 +11,95 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-21 — Hard-boundary test made order-independent
+
+The full suite went red on one test: `home_sim/tests/test_home_sim.py::TestHardBoundary::test_import_pulls_no_mind_package`. It asserted that no `calibos_mind` module was in `sys.modules` at the moment it ran — but in a full-suite run other test modules legitimately import `calibos_mind` into the shared pytest process first, so the assertion failed on run order, not on any real boundary violation. The source-level scans (no forbidden references, no mind import statements) passed, and the test passed standalone. Fix: the test now checks the property it names — that importing `home_sim` alone does not pull the mind package in — in a fresh interpreter subprocess, so it holds regardless of what the test process already imported. Verified by running it in one process after a mind-importing test file (51 passed). Full-suite re-run after the fix: 1520 passed, 1 xfailed, 17 subtests passed — green.
+
+## 2026-11-21 — Lost-latch recovery for authored-habit dormancy (Domain 28, check 2)
+
+Spec: `research/specs/2026-11-21-dormancy-latch-recovery.md`. The live
+store was in a state the existing code could not leave: both authored
+habits sat at live strength exactly 0.64 (demoted), the store held both
+demotion notes (`experience-1137` curious_question and
+`experience-1138` verify_before_claiming, both tick 735), but
+`authored-dormancy.json` said `demoted: false, demoted_tick: null` for
+both — the sidecar was lost in the harness-defect era and re-seeded
+from the live firing stamps, and the demotion edge (which requires
+strength >= 0.65) can never re-fire at 0.64. No behavioral consequence
+today, but the audit trail for a one-way transition — the domain-28
+evidence base — was broken, and any future code trusting the latch
+would be wrong.
+
+Mechanism (`calibos_mind/authored_dormancy.py`,
+`AuthoredDormancyTracker.recover_lost_latches`, wired at the top of
+`cli._run_tick` before the heartbeat): for each authored habit at
+exactly the demoted strength whose sidecar entry says demoted: False,
+the store's demotion note restores the latch — demoted True,
+demoted_tick the note's tick, owed None (the note already exists;
+nothing is minted). The tracker receives the records from `_run_tick`
+and never opens the store itself; a missing entry is seeded exactly
+as `observe_tick` seeds it, in the same tick. The note is validated
+before it is trusted: its baseline must equal the toml baseline
+(rounded, same comparison `observe_tick` uses) and its demoted_tick
+must be a sane int at or before the current tick. A habit at 0.64
+with no note, two notes, or a failing note raises ValueError — the
+audit trail is broken, not the habit fine — in two phases (every key
+validated before any key is mutated), so a failure leaves in-memory
+state and sidecar bytes untouched, and because recovery runs before
+the heartbeat, the tick never advances and nothing is minted. The
+recovery never writes a live strength (already 0.64; the existing
+reconcile converges on its own), never touches the `formed:`
+namespace, never alters `last_fired_tick` beyond fresh-entry seeding,
+and is idempotent: a second tick changes nothing. No restore path is
+added — recovery restores the latch, never a strength. The demotion
+edge itself, the ratchet, mint discipline, and `reconcile_state_habits`
+are untouched; a habit at baseline strength with no note still demotes
+only through the normal edge after 300 dormant ticks. Read-only
+commands and dream ticks never recover (they never tick); `init
+--force` still wipes the sidecar. No new sidecar, no schedule, no
+cartridge change.
+
+Tests: 17 new tests in `tests/test_authored_dormancy.py` (tracker-level
+recovery, both live habits, fresh sidecar, no-note / two-note /
+baseline-mismatch / future-tick fail-loud with byte-identical sidecar
+and unmutated in-memory state, sibling untouched on failure, normal
+paths unchanged, already-demoted no-op, formed: ignored, sub-threshold
+0.64 baseline ignored, determinism, plus end-to-end waking-tick
+recovery of both live latches with no mint, fresh-sidecar recovery,
+fail-loud before the tick advances, and read-only/dream leaving the
+lost latch unrecovered). Full suite green.
+
+Round 2 (critic round 1, FAIL 1, same day): the critic proved recovery
+silently discarded a pending owed mint — a sidecar entry with
+`demoted: False` and a pending `owed` mark (reachable by a sidecar edit
+or a future writer bug; the strict loader accepts the shape) latched
+from a different episode's note and set `owed: None`, so `observe_tick`
+never re-emitted the owed episode, nothing ever minted it, and the
+audit trail permanently lost that episode. Fix, per design-lead
+direction: recovery now fails loud (`ValueError`, before any mutation)
+on a pending owed mark on a candidate entry. Preserving owed and
+re-emitting it was refused — it would mint a second demotion note for
+the same habit, contradicting the one-episode ratchet. Two hardening
+items landed with it: (1) the note trust boundary now matches
+`mint_demotion_note`'s idempotency check — recovery trusts a note only
+from a record stamped source "temporal" and generated_by "cognition",
+so a pasted canonical note text in a message record (or a temporal
+record stamped by another author) never latches; records with no
+provenance at all are distrusted the same way. (2) Temporal
+consistency — a note's `demoted_tick` must be more than
+`DORMANCY_TICKS` after the entry's `last_fired_tick` (the demotion
+edge requires tick - last_fired > 300), judged on the seeded clock for
+a missing entry; a demotion at or before that bound contradicts the
+engine's own firing stamp. The live shape still heals under the new
+check (curious_question 735 - 7 = 728, verify_before_claiming 735 -
+(-10000) = 10735, both > 300). Six new tests (pending-owed fail-loud
+at tracker level with the owed mark intact and `observe_tick` still
+re-emitting it, pasted-note distrust, other-author distrust, the
+300/301 temporal boundary, and the end-to-end owed fail-loud before
+the tick advances); the round-1 note-record fixture now carries the
+provenance a real minted note carries. The critic's two round-1
+failing tests pass unmodified. Full suite green.
+
 ## 2026-11-20 — Realization follow-through surfacing into the view (Domain 27, check 9)
 
 Spec: `research/specs/2026-11-20-followthrough-surfacing.md`. Domain 27

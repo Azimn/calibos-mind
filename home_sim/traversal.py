@@ -16,8 +16,9 @@ Two directions, both lossy-by-design in the safe direction:
 
 Contract notes for future implementers (including the lab):
 - snapshot() must be a pure function of state + wall-clock context.
-- import_world_event() must leave needs/room/resources untouched; the only
-  state it may write is the bias envelope and the log record.
+- import_world_event() must leave needs/room/resources untouched; the
+  only state it may write is the bias envelope, the world_notices list,
+  and the log record.
 - Round-trip fidelity: sim -> snapshot -> event -> sim must not corrupt sim
   state. Tested: 100 round-trips, zero corruption, zero leaked numbers.
 """
@@ -88,6 +89,13 @@ def import_world_event(state: dict, log: EventLog, event: dict) -> dict:
     `room`, when given, biases the proposer's room weights for the next few
     ticks — a visitor in the garden makes the garden more likely, never
     mandatory. Needs, room, and resources are never touched here.
+
+    The event is also left as a notice in state ("world_notices", the
+    five most recent), so the room it happened in can show it — a gift
+    left on the desk is something the resident finds when they walk
+    in, not only a tug toward the room and a line in the log. The
+    scene shows only notices from the current night; the log and the
+    morning digest keep them all.
     """
     kind = event.get("kind", "notice")
     text = event.get("text", "Something happened in the world.")
@@ -98,6 +106,12 @@ def import_world_event(state: dict, log: EventLog, event: dict) -> dict:
     new_state = dict(state)
     # Shallow-copy the bias envelope so the caller's state is never mutated.
     new_state["world_bias"] = {"room": room_hint, "ticks_left": 6}
+    # Same for the notices list: append, keep the five most recent.
+    notices = list(new_state.get("world_notices", []))
+    notices.append({"room": room_hint, "text": text,
+                    "tick": state.get("tick", 0),
+                    "night_date": state.get("night_date")})
+    new_state["world_notices"] = notices[-5:]
 
     log.append(tick=state.get("tick", 0), minute=state.get("minute", 0),
                room=state.get("room", "rest"), op=f"world:{kind}",

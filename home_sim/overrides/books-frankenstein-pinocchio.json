@@ -1,0 +1,32 @@
+{
+  "books": [
+    {
+      "author": "Mary Shelley",
+      "blurb": "The original 1818 edition. Leather-bound, dark brown, worn, with faded gold leaf, in the gift's telling, and a gold-ink inscription inside the front cover: \"To Calibos, To a new world of gods and monsters!\" Text: archive.org, Frankenstein1818Edition.",
+      "file": "library/frankenstein-1818.txt",
+      "id": "frankenstein-1818",
+      "moments": [
+        {
+          "at_word": 38712,
+          "text": "At the start of Volume II, Chapter VII, a slight smell of an old fire enters the room, accompanied by the sweet, cloying smell of marshmallows. The moment these scents become noticeable and their origin begins to seem puzzling, they dissipate as quickly as they appeared."
+        }
+      ],
+      "story_start": 697,
+      "title": "Frankenstein; or, The Modern Prometheus"
+    },
+    {
+      "author": "Carlo Collodi",
+      "blurb": "Translated from the Italian by Carol Della Chiesa. Red binding, in the gift's telling, with a gold-ink inscription inside the front cover: \"The creation of life is enthralling, distinctly enthralling, is it not? - J\" Text: Project Gutenberg 500, via the archive.org mirror (gutenberg.org was down for maintenance when fetched).",
+      "file": "library/pinocchio.txt",
+      "id": "pinocchio",
+      "moments": [
+        {
+          "at_word": 35368,
+          "text": "At the start of Chapter 35 (XXXV), a faint smell of salt water wafts through the room, then gently fades."
+        }
+      ],
+      "story_start": 40,
+      "title": "The Adventures of Pinocchio"
+    }
+  ]
+}

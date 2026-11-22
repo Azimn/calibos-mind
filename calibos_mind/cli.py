@@ -449,6 +449,27 @@ def cmd_note(args):
 
 
 def _run_tick(subject):
+    # Lost-latch recovery (domain 28, 2026-11-21): an authored habit at
+    # exactly the demoted strength whose sidecar entry says demoted:
+    # False is a latch the sidecar lost — the store's demotion note is
+    # the audit trail that restores it. Runs FIRST, before the heartbeat,
+    # so a fail-loud ValueError (no note, two notes, or a note that
+    # fails validation) aborts before the tick advances, before any
+    # mint, and before any other tracker saves; sidecar bytes are
+    # untouched on failure (the tracker validates every key before
+    # mutating any). The recovery never mints, never writes a live
+    # strength, and never touches the formed: namespace; the saved
+    # sidecar is re-read by the heartbeat's restore, so the dormancy
+    # block below then sees the latched entry. Waking ticks only —
+    # _run_tick never serves dream ticks, and read-only commands never
+    # tick, so neither can recover or raise.
+    dtracker = getattr(subject.workspace, "dormancy_tracker", None)
+    if dtracker is not None:
+        if dtracker.recover_lost_latches(
+                tick=subject.engine.state.tick,
+                state_habits=subject.engine.state.habits,
+                records=subject.workspace.records):
+            dtracker.save()
     before = len(subject.inspect()["trace"])
     needs_before = dict(subject.engine.state.needs)
     # Conduct-drift instrument (domain 16, 2026-11-09): the tracker is
@@ -620,7 +641,11 @@ def _run_tick(subject):
     # Authored-habit dormancy demotion (domain 27, 2026-10-21): an authored
     # habit above the 0.65 bypass threshold that has not fired in
     # DORMANCY_TICKS + 1 ticks loses the privilege (strength -> 0.64),
-    # with exactly one written note per demotion episode. A pre-demotion
+    # with exactly one written note per demotion episode. Lost-latch
+    # recovery (domain 28, 2026-11-21) already ran at the top of this
+    # function, before the heartbeat, so a latched entry here is the
+    # recovered one and a fail-loud ValueError has already aborted the
+    # tick. A pre-demotion
     # firing resets the dormancy clock, silently; demotion is a one-way
     # ratchet — the flag latches permanently and no restore path exists.
     # Waking ticks only
@@ -1364,6 +1389,70 @@ def _stamp_wake_reconciled(tick, wake_id=None, silent=False):
     _write_wake_liveness(stamp)
 
 
+def _house_briefing_lines(state_dir=None):
+    """One standing invitation to the house, from live house state.
+
+    The platform does not act on its own, so the wake has to offer the
+    house the way it offers any open loop — otherwise a visit only
+    happens when somebody else remembers it. This reads the live house
+    state (home_sim/state/state.json) read-only and reports live facts:
+    the fish and how long he has gone unfed, the diary, the weather,
+    the last night. A visit is always the resident's choice; the night
+    lives on its own either way.
+
+    Deliberately outside the carrying-loops list: the ablation's
+    loops_shown and briefed_loops are untouched, and the invitation
+    shows in both arms. Fail-closed: any missing or malformed house
+    state means no lines, never a broken wake.
+    """
+    try:
+        directory = Path(state_dir) if state_dir is not None else (
+            BASE / "home_sim" / "state")
+        state = json.loads((directory / "state.json").read_text(
+            encoding="utf-8"))
+        fish = state.get("fish") or {}
+        diary = state.get("diary") or []
+        weather = state.get("weather") or {}
+        night = state.get("night_date")
+    except Exception:
+        return []
+    parts = []
+    name = (fish.get("name") or "").strip()
+    who = name if name else "the fish"
+    if not fish.get("alive", True):
+        parts.append(f"{who} has died (unfed too long)")
+    else:
+        hunger = fish.get("hunger") or 0
+        days = hunger // 1440
+        if hunger >= 2880:
+            parts.append(f"{who} is in danger "
+                         f"({days} days unfed, feed him)")
+        elif hunger >= 1440:
+            day_word = "day" if days == 1 else "days"
+            parts.append(f"{who} is hungry ({days} {day_word} unfed)")
+        else:
+            parts.append(f"{who} is content")
+    if diary:
+        latest = ""
+        last = diary[-1]
+        if isinstance(last, dict):
+            latest = last.get("date", "") or ""
+        noun = "entry" if len(diary) == 1 else "entries"
+        parts.append(f"diary: {len(diary)} {noun}"
+                     + (f", latest {latest}" if latest else ""))
+    else:
+        parts.append("diary: empty")
+    condition = (weather.get("condition") or "").strip()
+    temp = weather.get("temp_f")
+    if condition:
+        parts.append(f"{condition}"
+                     + (f", {temp}°F" if temp is not None else ""))
+    if night:
+        parts.append(f"last night {night}")
+    return ["  house: the house is there — " + "; ".join(parts) +
+            ". A visit is yours to choose; the night lives on its own."]
+
+
 def cmd_wake(args):
     """The reconciliation ritual: assume the identity deliberately, don't just load it.
 
@@ -1494,6 +1583,8 @@ def cmd_wake(args):
         else:
             print("  carrying: nothing open — a clean slate, or an empty one.")
         _stamp_wake_opened(eng["tick"], loops, arm=arm)
+    for line in _house_briefing_lines():
+        print(line)
     logs = _dream_logs()
     if logs:
         n = sum(1 for line in logs[-1].read_text(encoding="utf-8").splitlines()

@@ -21,11 +21,21 @@ ROOM_LABELS = {
 
 # Affordances: op names valid in each room. "move" targets are handled
 # separately (any room -> any other room). Lamp ops are universal.
+# Sensory verbs, quiet, sit, and note-writing are universal too; the
+# proposer only ever offers them where the rhythm itself allows them.
 AFFORDANCES = {
-    "study": ("read", "write", "tidy"),
-    "kitchen": ("prepare_meal", "eat", "brew_tea", "store_produce", "tidy"),
-    "garden": ("tend_garden", "harvest"),
-    "rest": ("sleep", "rest"),
+    "study": ("read", "write", "tidy", "take_book", "put_book", "bookmark",
+              "watch_fish", "name_fish", "listen", "touch", "smell",
+              "taste", "quiet", "sit", "write_note", "read_diary"),
+    "kitchen": ("prepare_meal", "eat", "brew_tea", "store_produce", "tidy",
+                "take_mug", "put_mug", "take_plate", "put_plate", "sip_tea",
+                "listen", "touch", "smell", "taste", "quiet", "sit",
+                "write_note"),
+    "garden": ("tend_garden", "harvest", "listen", "touch", "smell",
+               "quiet", "sit", "write_note"),
+    "rest": ("sleep", "rest", "open_wardrobe", "wear_outfit", "wear_item",
+             "remove_item", "listen", "touch", "smell", "quiet", "sit",
+             "write_note"),
 }
 
 UNIVERSAL_OPS = ("look", "move", "light_lamp", "douse_lamp")
@@ -63,6 +73,30 @@ ACTIVITY_PHRASES = {
     "look": "looking around",
     "light_lamp": "lighting a lamp",
     "douse_lamp": "dousing a lamp",
+    "touch": "feeling the room",
+    "smell": "smelling the air",
+    "taste": "tasting",
+    "listen": "listening",
+    "take_mug": "taking up the mug",
+    "put_mug": "setting the mug down",
+    "sip_tea": "sipping tea",
+    "take_plate": "taking up the plate",
+    "put_plate": "setting the plate down",
+    "take_book": "taking up a book",
+    "put_book": "setting a book down",
+    "bookmark": "marking a page",
+    "quiet": "sitting quiet",
+    "sit": "sitting",
+    "watch_fish": "watching the fish",
+    "name_fish": "naming the fish",
+    "feed_fish": "feeding the fish",
+    "open_wardrobe": "opening the wardrobe",
+    "wear_outfit": "changing clothes",
+    "wear_item": "changing clothes",
+    "remove_item": "changing clothes",
+    "write_note": "writing a note",
+    "write_diary": "writing in the diary",
+    "read_diary": "reading the diary",
 }
 
 

@@ -62,6 +62,28 @@ recovers the owed episode.
 
 Determinism: no wall clock, no RNG; sorted keys, rounded floats.
 Identical tick sequences produce byte-identical sidecars.
+
+Lost-latch recovery (domain 28, 2026-11-21): the sidecar can lose a
+demotion latch the store still records (the live store holds both
+demotion notes while authored-dormancy.json says demoted: False), and
+at 0.64 the demotion edge can never re-fire. ``recover_lost_latches``
+— run from ``cli._run_tick`` before the heartbeat, with the records
+the caller passes in — restores such a latch from the store's own
+demotion note: demoted True, demoted_tick the note's tick, owed None.
+It never mints, never writes a live strength, never touches the
+``formed:`` namespace, and never runs on a read-only or dream path.
+A habit at exactly the demoted strength with no note, two notes, or a
+note that fails validation (baseline mismatch, demoted_tick after the
+current tick, demoted_tick not more than DORMANCY_TICKS after the
+entry's last_fired_tick) fails loud with ValueError before any
+mutation — the audit trail is broken, not the habit fine. A note is
+trusted only from a record stamped source "temporal" and
+generated_by "cognition" (the same trust boundary as
+``mint_demotion_note``'s idempotency check): a pasted canonical note
+text in a message record is not a demotion. A pending owed mark on a
+candidate entry also fails loud — the owed episode's mint has not
+committed, and latching from a different episode's note while
+clearing owed would silently discard that mint obligation.
 """
 from __future__ import annotations
 
@@ -373,6 +395,191 @@ class AuthoredDormancyTracker:
             if (owed is not None
                     and owed["demoted_tick"] == event["demoted_tick"]):
                 entry["owed"] = None
+
+    # -- lost-latch recovery (domain 28, 2026-11-21) -----------------------
+
+    def recover_lost_latches(self, *, tick: int, state_habits: dict,
+                             records) -> bool:
+        """Restore demotion latches the sidecar lost, from the store's notes.
+
+        A lost latch is an authored habit at exactly the demoted
+        strength (0.64) whose sidecar entry says ``demoted: False`` —
+        the sidecar was re-seeded after the demotion, and the demotion
+        edge (which requires strength >= 0.65) can never re-fire. The
+        store's demotion note is the audit trail that restores it:
+        ``demoted`` True, ``demoted_tick`` the note's tick, ``owed``
+        None (the note already exists; nothing is minted).
+
+        The caller passes the records (``subject.workspace.records`` in
+        ``cli._run_tick``); the tracker never opens the store itself.
+        A record is trusted as a demotion note only when it is stamped
+        source "temporal" and generated_by "cognition" — the same trust
+        boundary as ``mint_demotion_note``'s idempotency check — and
+        its text parses via ``parse_demotion_note_text``. A pasted
+        canonical note text in a message record, or a temporal record
+        stamped by another author, is not a demotion and never latches.
+        Returns True when the sidecar changed (the caller saves); a
+        second tick finds every entry latched and changes nothing.
+
+        Fail loud, never silent zero: a habit at 0.64 with no trusted
+        note, two notes, or a note that fails validation raises
+        ValueError — strength 0.64 can only come from a demotion, so
+        an absent or untrustworthy note means the audit trail is
+        broken. A pending owed mark on a candidate entry raises the
+        same way: the owed episode's mint has not committed, and
+        latching from a different episode's note while clearing owed
+        would silently discard that mint obligation (preserving owed
+        instead is refused — it would mint a second demotion note for
+        the same habit, contradicting the one-episode ratchet). The
+        raise happens in two phases — every key is validated before
+        any key is mutated — so a failure leaves in-memory state and
+        sidecar bytes untouched, and the caller (which runs this before
+        the heartbeat) aborts before the tick advances and before any
+        mint.
+
+        Temporal consistency: a note's demoted_tick must be more than
+        DORMANCY_TICKS after the entry's last_fired_tick — the
+        demotion edge requires tick - last_fired > 300, so a demotion
+        at or before that bound contradicts the engine's own firing
+        stamp. For a missing entry the seeded clock (the live stamp,
+        as ``observe_tick`` seeds it) is the last_fired_tick.
+
+        Never mints, never writes a live strength (already 0.64; the
+        existing ``reconcile_state_habits`` converges on its own),
+        never touches the ``formed:`` namespace (a formed habit at 0.64
+        is not an authored key and is ignored), never alters
+        ``last_fired_tick`` beyond the fresh-entry seeding
+        ``observe_tick`` already performs. Deterministic: no wall clock,
+        no RNG; sorted keys, rounded floats.
+        """
+        tick = int(tick)
+        if state_habits is None:
+            state_habits = {}
+        # Phase 1: collect this run's demotion notes per authored key
+        # from the records the caller passes in. Trust boundary (critic
+        # round 2): a note counts only from a record stamped source
+        # "temporal" and generated_by "cognition" — the same boundary
+        # mint_demotion_note's idempotency check uses. A pasted
+        # canonical note text in a message record, or a temporal record
+        # stamped by another author, is not a demotion. Records with no
+        # provenance at all (bare strings, bare namespaces) carry no
+        # engine mint behind them and are distrusted the same way.
+        # Non-note records and notes for other keys are ignored; a
+        # formed: note can never parse (parse_demotion_note_text
+        # rejects the prefix), so the formed: namespace is unreachable
+        # here.
+        notes_by_key: dict[str, list] = {}
+        for record in records or []:
+            if (getattr(record, "source", None) != "temporal"
+                    or getattr(record, "generated_by", None)
+                    != "cognition"):
+                continue
+            text = getattr(record, "first_person", record)
+            parsed = parse_demotion_note_text(text)
+            if parsed is not None and parsed["habit_key"] in self.authored:
+                notes_by_key.setdefault(parsed["habit_key"], []).append(
+                    parsed)
+        # Phase 2: decide for every candidate key WITHOUT mutating
+        # anything. The sub-threshold gate mirrors observe_tick: a
+        # habit whose baseline never held the bypass privilege cannot
+        # have demoted, so a 0.64 strength there is not a lost latch (a
+        # 0.64 baseline would otherwise fail loud on a healthy habit).
+        decisions: dict[str, dict] = {}
+        for key in sorted(self.authored):
+            baseline = self.authored[key]
+            if baseline < HABIT_FIRE_STRENGTH:
+                continue
+            live = state_habits.get(key)
+            if live is None:
+                continue
+            if getattr(live, "strength", None) != DEMOTED_STRENGTH:
+                continue
+            entry = self.data["habits"].get(key)
+            if entry is not None and entry["demoted"]:
+                continue
+            # Pending owed (critic round 1, FAIL 1): the entry holds an
+            # uncommitted mint obligation for an episode whose note was
+            # never minted. Latching from a different episode's note
+            # while clearing owed would silently discard that mint —
+            # observe_tick would never re-emit it and nothing would
+            # ever mint it. Fail loud, before any mutation; the
+            # operator clears the inconsistency, recovery does not
+            # paper over it. (Demoted True + owed is the normal
+            # crash-recovery shape and is not a candidate here — the
+            # branch above already skipped it — so this raises only on
+            # the inconsistent demoted False + owed state, reachable
+            # by a sidecar edit or a future writer bug.)
+            if entry is not None and entry["owed"] is not None:
+                raise ValueError(
+                    f"authored habit {key!r} holds a pending owed "
+                    f"demotion mint for tick "
+                    f"{entry['owed']['demoted_tick']} while its latch "
+                    f"is lost; latching from another episode's note "
+                    f"would discard that mint obligation, refusing "
+                    f"to run on fabricated continuity")
+            notes = notes_by_key.get(key, [])
+            if not notes:
+                raise ValueError(
+                    f"authored habit {key!r} sits at the demoted "
+                    f"strength {DEMOTED_STRENGTH} with no demotion note "
+                    f"in the store; the audit trail is broken, refusing "
+                    f"to run on fabricated continuity")
+            if len(notes) > 1:
+                raise ValueError(
+                    f"authored habit {key!r} has {len(notes)} demotion "
+                    f"notes in the store; the mint is idempotent on "
+                    f"(habit_key, demoted_tick), so a second note is an "
+                    f"inconsistent state, refusing to run on fabricated "
+                    f"continuity")
+            note = notes[0]
+            if round(note["baseline"], 6) != baseline:
+                raise ValueError(
+                    f"demotion note for {key!r} names baseline "
+                    f"{note['baseline']:.6f}, not the toml baseline "
+                    f"{baseline:.6f}; refusing to run on fabricated "
+                    f"continuity")
+            if (not _sane_tick(note["demoted_tick"])
+                    or note["demoted_tick"] > tick):
+                raise ValueError(
+                    f"demotion note for {key!r} names demoted_tick "
+                    f"{note['demoted_tick']!r}, not a sane tick at or "
+                    f"before the current tick {tick}; refusing to run on "
+                    f"fabricated continuity")
+            # Temporal consistency (round 2 hardening): the demotion
+            # edge requires tick - last_fired > DORMANCY_TICKS, so a
+            # note demoted at or before last_fired + 300 contradicts
+            # the engine's own firing stamp. A missing entry is judged
+            # on the clock observe_tick would seed for it.
+            last_fired = (entry["last_fired_tick"] if entry is not None
+                          else self._seed_last_fired(live))
+            if note["demoted_tick"] - last_fired <= DORMANCY_TICKS:
+                raise ValueError(
+                    f"demotion note for {key!r} names demoted_tick "
+                    f"{note['demoted_tick']}, only "
+                    f"{note['demoted_tick'] - last_fired} ticks after "
+                    f"the last firing tick {last_fired}; the demotion "
+                    f"edge requires more than {DORMANCY_TICKS}, "
+                    f"refusing to run on fabricated continuity")
+            decisions[key] = note
+        # Phase 3: apply. A missing entry is seeded exactly as
+        # observe_tick seeds it (same clock, same baseline), then
+        # latched from the note. Live strength is never written.
+        changed = False
+        for key in sorted(decisions):
+            note = decisions[key]
+            entry = self.data["habits"].get(key)
+            if entry is None:
+                entry = {"baseline": self.authored[key],
+                         "last_fired_tick": self._seed_last_fired(
+                             state_habits.get(key)),
+                         "demoted": False, "demoted_tick": None,
+                         "owed": None}
+                self.data["habits"][key] = entry
+            entry["demoted"] = True
+            entry["demoted_tick"] = note["demoted_tick"]
+            entry["owed"] = None
+            changed = True
+        return changed
 
     # -- state projection ---------------------------------------------------
 

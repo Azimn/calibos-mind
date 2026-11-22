@@ -18,8 +18,39 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .rhythm import FISH_DEATH_MARKER
+from .weather import weather_adjective
+
 PROVENANCE_SIMULATED = "simulated"
 PROVENANCE_WORLD = "world"
+
+# The need-status sentences rhythm._need_signals appends to action texts.
+# The digest dedups on the base text (below), so "I read for a while. I
+# am getting tired." and "I read for a while. I feel worn out..." count
+# as one moment, not two — otherwise the narrative is a tally wearing
+# narrative clothes. Mirrors rhythm._need_signals; keep them in step.
+NEED_SIGNAL_SENTENCES = (
+    " I feel worn out and find it hard to concentrate.",
+    " I am getting tired.",
+    " I am painfully hungry.",
+    " I could do with something to eat.",
+    " My mouth is dry.",
+)
+
+
+def _base_text(text: str) -> str:
+    """An event's text with trailing need-status sentences stripped, so
+    repeats of the same moment collapse however the body felt at the
+    time."""
+    stripped = text
+    changed = True
+    while changed:
+        changed = False
+        for sentence in NEED_SIGNAL_SENTENCES:
+            if stripped.endswith(sentence):
+                stripped = stripped[:-len(sentence)]
+                changed = True
+    return stripped
 
 
 def _utc_now() -> str:
@@ -78,24 +109,71 @@ class EventLog:
                 if r.get("night_date") == night_date]
 
 
-def summarize_night(records: list[dict]) -> str:
-    """Morning "while you were out" digest. Marked simulated; the wake agent
-    may note reactions but must never import these as memories."""
+def summarize_night(records: list[dict], weather: dict | None = None
+                    ) -> str:
+    """Morning "while you were out" digest, as a short first-person
+    narrative of the night — not a tally. Marked simulated; the wake agent
+    may note reactions but must never import these as memories.
+
+    Up to eight distinctive moments, in the order they happened, exact
+    repeats dropped, then a closing line giving the night's date and the
+    count of moments. World events are quoted separately. When weather
+    is given, the header names the night's condition — the sky the
+    resident actually lived under.
+    """
     sim = [r for r in records if r.get("provenance") == PROVENANCE_SIMULATED]
     world = [r for r in records if r.get("provenance") == PROVENANCE_WORLD]
     if not records:
         return "(no off-hours activity recorded — simulated)"
-    lines = ["While you were out (simulated):"]
-    counts: dict[str, int] = {}
+    night = records[0].get("night_date") or "that night"
+    preferred = ("watch_fish", "name_fish", "feed_fish", "sip_tea",
+                 "brew_tea", "read", "write", "eat", "harvest", "sleep",
+                 "wear_outfit", "wear_item", "quiet", "sit", "tend_garden",
+                 "store_produce", "take_book", "bookmark", "listen",
+                 "touch", "smell", "taste", "write_note", "write_diary",
+                 "read_diary")
+    moments: list[str] = []
+    seen: set[str] = set()
     for r in sim:
-        counts[r.get("op", "?")] = counts.get(r.get("op", "?"), 0) + 1
-    done = ", ".join(f"{op} x{n}" for op, n in sorted(counts.items()))
-    lines.append(f"  did: {done}" if done else "  did: nothing recorded")
-    # A few first-person moments, for texture — the surprise the spec wants.
-    moments = [r["text"] for r in sim if r.get("op") in
-               ("eat", "harvest", "store_produce", "write", "sleep")][:3]
-    for m in moments:
-        lines.append(f"  — {m}")
+        base = _base_text(r["text"])
+        if r.get("op") in preferred and base not in seen:
+            moments.append(base)
+            seen.add(base)
+        if len(moments) >= 8:
+            break
+    if len(moments) < 3:
+        for r in sim:
+            base = _base_text(r["text"])
+            if base not in seen:
+                moments.append(base)
+                seen.add(base)
+            if len(moments) >= 8:
+                break
+    # A dead fish is the one moment the morning must not miss: if any
+    # event of the night carries the death sentence, it leads the digest
+    # even when its action is not one of the preferred kinds.
+    for r in sim:
+        if FISH_DEATH_MARKER in r["text"]:
+            death = _base_text(r["text"])
+            if death not in seen:
+                moments.insert(0, death)
+                seen.add(death)
+            break
+    moments = moments[:8]
+    header = f"While you were out (simulated) — the night of {night}"
+    if weather and weather.get("condition"):
+        header += f", a {weather_adjective(weather['condition'])} night"
+        temp = weather.get("temp_f")
+        if temp is not None:
+            header += f", {temp:g}°F"
+    header += ":"
+    lines = [header]
+    if moments:
+        lines.append(" ".join(moments))
+    else:
+        lines.append("I puttered about the house, and nothing in particular "
+                     "asked for my attention.")
     for r in world:
-        lines.append(f"  (from the world: {r.get('text', '')})")
+        lines.append(f"(from the world: {r.get('text', '')})")
+    lines.append(f"— {len(sim)} moments in all, all simulated —")
     return "\n".join(lines)

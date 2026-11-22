@@ -34,6 +34,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -737,3 +738,516 @@ def test_exactly_300_ticks_is_not_dormant():
     events, _, stc = tracker.observe_tick(tick=400, state_habits=live)
     assert events == [] and not stc
     assert live[CQ].strength == 0.72
+
+
+# -- lost-latch recovery (domain 28, 2026-11-21) ------------------------------
+# Spec: research/specs/2026-11-21-dormancy-latch-recovery.md. The live
+# store holds both demotion notes while the sidecar says demoted: False,
+# and at 0.64 the demotion edge can never re-fire. Recovery restores
+# the latch from the store's own note: demoted True, demoted_tick the
+# note's tick, owed None. It never mints, never writes a live strength,
+# never touches the formed: namespace, and runs on waking ticks only,
+# before the heartbeat — so a fail-loud ValueError aborts before the
+# tick advances. All fixtures live in /tmp; the live store is never
+# touched.
+
+def _note_record(key, baseline, span, tick):
+    """A record-shaped object carrying one canonical demotion note.
+
+    Carries the provenance a real minted note carries (source temporal,
+    generated_by cognition): recovery trusts only such records (round 2
+    hardening — a pasted canonical note text in a message record must
+    not latch).
+    """
+    return SimpleNamespace(
+        source="temporal", generated_by="cognition",
+        first_person=demotion_note_text(
+            {"habit_key": key, "dormancy_ticks": span, "baseline": baseline,
+             "demoted_tick": tick}))
+
+
+def test_recovery_restores_lost_latch_from_note():
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 0))
+    path = tmp / "authored-dormancy.json"
+    tracker = AuthoredDormancyTracker(path, {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    records = [_note_record(CQ, 0.72, 400, 400)]
+    assert tracker.recover_lost_latches(
+        tick=400, state_habits=live, records=records) is True
+    entry = tracker.data["habits"][CQ]
+    assert entry["demoted"] is True and entry["demoted_tick"] == 400
+    assert entry["owed"] is None
+    assert entry["last_fired_tick"] == 0  # the seeded clock stands
+    assert live[CQ].strength == 0.64  # live strength never written
+    assert len(records) == 1  # no new record minted
+    # Second tick: idempotent, sidecar byte-identical.
+    tracker.save()
+    first = path.read_bytes()
+    assert tracker.recover_lost_latches(
+        tick=401, state_habits=live, records=records) is False
+    tracker.save()
+    assert path.read_bytes() == first
+
+
+def test_recovery_recovers_both_live_habits_in_one_tick():
+    # The exact live shape: curious_question 0.72/735 and
+    # verify_before_claiming 0.68/735, sidecar demoted: False for both.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 7),
+                           **_entry(VBC, 0.68, -10000))
+    tracker = AuthoredDormancyTracker(
+        tmp / "authored-dormancy.json", {CQ: 0.72, VBC: 0.68})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0),
+            VBC: Habit(VBC, "uncertainty", Action.OBSERVE, 0.64, 3, 0)}
+    records = [_note_record(CQ, 0.72, 728, 735),
+               _note_record(VBC, 0.68, 10735, 735)]
+    assert tracker.recover_lost_latches(
+        tick=736, state_habits=live, records=records) is True
+    for key in (CQ, VBC):
+        entry = tracker.data["habits"][key]
+        assert entry["demoted"] is True and entry["demoted_tick"] == 735
+        assert entry["owed"] is None
+    assert live[CQ].strength == 0.64 and live[VBC].strength == 0.64
+    assert len(records) == 2  # no new record minted
+
+
+def test_recovery_seeds_fresh_sidecar_entry_in_same_tick():
+    tmp = _tmp()
+    tracker = AuthoredDormancyTracker(tmp / "d.json", {CQ: 0.72})
+    assert tracker.data == {"habits": {}}
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    note = _note_record(CQ, 0.72, 400, 400)
+    assert tracker.recover_lost_latches(
+        tick=400, state_habits=live, records=[note]) is True
+    entry = tracker.data["habits"][CQ]
+    assert entry["demoted"] is True and entry["demoted_tick"] == 400
+    assert entry["owed"] is None
+    assert entry["last_fired_tick"] == 0  # seeded from the live stamp
+    assert live[CQ].strength == 0.64
+
+
+def test_recovery_no_note_raises_and_touches_nothing():
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 7))
+    path = tmp / "authored-dormancy.json"
+    tracker = AuthoredDormancyTracker(path, {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    before = path.read_bytes()
+    data_before = json.loads(before)
+    with pytest.raises(ValueError):
+        tracker.recover_lost_latches(
+            tick=735, state_habits=live, records=[])
+    assert path.read_bytes() == before  # sidecar bytes untouched
+    assert tracker.data == data_before  # no in-memory mutation either
+    assert live[CQ].strength == 0.64
+
+
+def test_recovery_failure_leaves_sibling_unrecovered():
+    # Two-phase validation: CQ has its note, VBC has none. The raise
+    # must not leave CQ's latch half-restored in memory.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 7),
+                           **_entry(VBC, 0.68, -10000))
+    path = tmp / "authored-dormancy.json"
+    tracker = AuthoredDormancyTracker(
+        path, {CQ: 0.72, VBC: 0.68})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0),
+            VBC: Habit(VBC, "uncertainty", Action.OBSERVE, 0.64, 3, 0)}
+    records = [_note_record(CQ, 0.72, 728, 735)]
+    before = path.read_bytes()
+    data_before = json.loads(json.dumps(tracker.data))
+    with pytest.raises(ValueError):
+        tracker.recover_lost_latches(
+            tick=736, state_habits=live, records=records)
+    assert tracker.data == data_before
+    assert path.read_bytes() == before
+    assert tracker.data["habits"][CQ]["demoted"] is False
+    assert tracker.data["habits"][VBC]["demoted"] is False
+
+
+def test_recovery_two_notes_raises():
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 0))
+    path = tmp / "authored-dormancy.json"
+    tracker = AuthoredDormancyTracker(path, {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    records = [_note_record(CQ, 0.72, 400, 400),
+               _note_record(CQ, 0.72, 401, 401)]
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        tracker.recover_lost_latches(
+            tick=402, state_habits=live, records=records)
+    assert path.read_bytes() == before
+    assert tracker.data["habits"][CQ]["demoted"] is False
+
+
+def test_recovery_note_baseline_mismatch_raises():
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 0))
+    tracker = AuthoredDormancyTracker(
+        tmp / "authored-dormancy.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    # The note names a 0.70 baseline; the toml says 0.72.
+    note = _note_record(CQ, 0.70, 400, 400)
+    with pytest.raises(ValueError):
+        tracker.recover_lost_latches(
+            tick=400, state_habits=live, records=[note])
+    assert tracker.data["habits"][CQ]["demoted"] is False
+
+
+def test_recovery_note_future_tick_raises():
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 0))
+    tracker = AuthoredDormancyTracker(
+        tmp / "authored-dormancy.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    # A note demoted at tick 500 cannot be trusted at tick 400.
+    note = _note_record(CQ, 0.72, 400, 500)
+    with pytest.raises(ValueError):
+        tracker.recover_lost_latches(
+            tick=400, state_habits=live, records=[note])
+    assert tracker.data["habits"][CQ]["demoted"] is False
+
+
+def test_recovery_pending_owed_raises_and_touches_nothing():
+    # Critic round 1, FAIL 1: the sidecar holds a pending owed mint
+    # for tick 400 while the store holds a note for a different
+    # episode (tick 399). Recovery must refuse — latching from the
+    # 399 note while clearing owed would silently discard the tick-400
+    # mint obligation; observe_tick would never re-emit it and nothing
+    # would ever mint it. Preserving owed instead is refused: it would
+    # mint a second demotion note for the same habit, contradicting
+    # the one-episode ratchet.
+    tmp = _tmp()
+    owed_400 = {"habit_key": CQ, "dormancy_ticks": 400, "baseline": 0.72,
+                "demoted_tick": 400}
+    _seed_dormancy_sidecar(
+        tmp, **_entry(CQ, 0.72, 0, demoted=False, demoted_tick=None,
+                      owed=owed_400))
+    path = tmp / "authored-dormancy.json"
+    tracker = AuthoredDormancyTracker(path, {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    records = [_note_record(CQ, 0.72, 399, 399)]
+    before = path.read_bytes()
+    data_before = json.loads(json.dumps(tracker.data))
+    with pytest.raises(ValueError):
+        tracker.recover_lost_latches(
+            tick=401, state_habits=live, records=records)
+    assert path.read_bytes() == before  # sidecar bytes untouched
+    assert tracker.data == data_before  # no in-memory mutation either
+    entry = tracker.data["habits"][CQ]
+    assert entry["demoted"] is False and entry["owed"] == owed_400
+    assert live[CQ].strength == 0.64
+    # The owed episode is still recoverable by the normal path:
+    # observe_tick re-emits it so its note gets minted.
+    events, _, _ = tracker.observe_tick(tick=401, state_habits=live)
+    assert any(e["demoted_tick"] == 400 for e in events)
+
+
+def test_recovery_distrusts_pasted_note_in_message_record():
+    # Round 2 hardening 1: a canonical demotion note text pasted into
+    # a message record is not a demotion — recovery trusts only
+    # source temporal + generated_by cognition, the same boundary as
+    # mint_demotion_note's idempotency check.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 0))
+    path = tmp / "authored-dormancy.json"
+    tracker = AuthoredDormancyTracker(path, {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    pasted = SimpleNamespace(
+        source="message", generated_by="authored",
+        first_person=demotion_note_text(
+            {"habit_key": CQ, "dormancy_ticks": 400, "baseline": 0.72,
+             "demoted_tick": 400}))
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        tracker.recover_lost_latches(
+            tick=400, state_habits=live, records=[pasted])
+    assert path.read_bytes() == before
+    assert tracker.data["habits"][CQ]["demoted"] is False
+
+
+def test_recovery_distrusts_temporal_note_by_other_author():
+    # Same boundary, other half: a temporal record stamped by another
+    # author (not cognition) is not an engine-minted demotion note.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 0))
+    tracker = AuthoredDormancyTracker(
+        tmp / "authored-dormancy.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    forged = SimpleNamespace(
+        source="temporal", generated_by="authored",
+        first_person=demotion_note_text(
+            {"habit_key": CQ, "dormancy_ticks": 400, "baseline": 0.72,
+             "demoted_tick": 400}))
+    with pytest.raises(ValueError):
+        tracker.recover_lost_latches(
+            tick=400, state_habits=live, records=[forged])
+    assert tracker.data["habits"][CQ]["demoted"] is False
+
+
+def test_recovery_note_within_dormancy_window_raises():
+    # Round 2 hardening 2: the demotion edge requires tick -
+    # last_fired > 300, so a note demoted 300 ticks (or fewer) after
+    # the last firing contradicts the engine's own firing stamp.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 400))
+    tracker = AuthoredDormancyTracker(
+        tmp / "authored-dormancy.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    # Exactly 300 ticks after the last firing: not more than 300.
+    note = _note_record(CQ, 0.72, 300, 700)
+    with pytest.raises(ValueError):
+        tracker.recover_lost_latches(
+            tick=700, state_habits=live, records=[note])
+    assert tracker.data["habits"][CQ]["demoted"] is False
+    # Well inside the window is no better.
+    note = _note_record(CQ, 0.72, 100, 500)
+    with pytest.raises(ValueError):
+        tracker.recover_lost_latches(
+            tick=700, state_habits=live, records=[note])
+    assert tracker.data["habits"][CQ]["demoted"] is False
+
+
+def test_recovery_note_just_over_dormancy_window_recovers():
+    # Boundary: 301 ticks after the last firing is more than 300, so
+    # the note is temporally consistent and the latch recovers.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 400))
+    tracker = AuthoredDormancyTracker(
+        tmp / "authored-dormancy.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    note = _note_record(CQ, 0.72, 301, 701)
+    assert tracker.recover_lost_latches(
+        tick=701, state_habits=live, records=[note]) is True
+    entry = tracker.data["habits"][CQ]
+    assert entry["demoted"] is True and entry["demoted_tick"] == 701
+    assert entry["owed"] is None
+
+
+def test_recovery_noop_at_baseline_then_normal_demotion_still_fires():
+    # Normal paths unchanged: at baseline strength with no note there
+    # is nothing to recover, and the demotion edge still fires after
+    # 300 dormant ticks with exactly one note.
+    tmp = _tmp()
+    tracker = AuthoredDormancyTracker(tmp / "d.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 0)}
+    assert tracker.recover_lost_latches(
+        tick=100, state_habits=live, records=[]) is False
+    assert tracker.data["habits"] == {}  # no entry seeded
+    events, sc, stc = tracker.observe_tick(tick=400, state_habits=live)
+    assert len(events) == 1 and stc
+    assert events[0]["demoted_tick"] == 400
+    assert events[0]["habit_key"] == CQ
+
+
+def test_recovery_already_demoted_is_noop():
+    tmp = _tmp()
+    _seed_dormancy_sidecar(
+        tmp, **_entry(CQ, 0.72, 0, demoted=True, demoted_tick=400))
+    tracker = AuthoredDormancyTracker(
+        tmp / "authored-dormancy.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    note = _note_record(CQ, 0.72, 400, 400)
+    assert tracker.recover_lost_latches(
+        tick=401, state_habits=live, records=[note]) is False
+    entry = tracker.data["habits"][CQ]
+    assert entry["demoted"] is True and entry["demoted_tick"] == 400
+
+
+def test_recovery_ignores_formed_habit_at_064():
+    tmp = _tmp()
+    tracker = AuthoredDormancyTracker(tmp / "d.json", {CQ: 0.72})
+    live = {
+        CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 0),
+        "formed:hunger:seek_contact": Habit(
+            "formed:hunger:seek_contact", "hunger", Action.SEEK_CONTACT,
+            0.64, 2, 0),
+    }
+    assert tracker.recover_lost_latches(
+        tick=400, state_habits=live, records=[]) is False
+    assert "formed:hunger:seek_contact" not in tracker.data["habits"]
+    assert tracker.data["habits"] == {}
+
+
+def test_recovery_ignores_sub_threshold_baseline_at_064():
+    # A 0.64 baseline never held the bypass privilege, so a 0.64 live
+    # strength there is not a lost latch — and must not fail loud on a
+    # healthy habit.
+    tmp = _tmp()
+    tracker = AuthoredDormancyTracker(tmp / "d.json", {"weak": 0.64})
+    live = {"weak": Habit("weak", "curiosity", Action.EXPLORE, 0.64, 2, 0)}
+    assert tracker.recover_lost_latches(
+        tick=400, state_habits=live, records=[]) is False
+    assert tracker.data["habits"] == {}
+
+
+def _replay_recovery(path: Path):
+    tracker = AuthoredDormancyTracker(path, {CQ: 0.72, VBC: 0.68})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.64, 2, 0),
+            VBC: Habit(VBC, "uncertainty", Action.OBSERVE, 0.64, 3, 0)}
+    records = [_note_record(CQ, 0.72, 728, 735),
+               _note_record(VBC, 0.68, 10735, 735)]
+    for tick in (736, 737, 738):
+        tracker.recover_lost_latches(
+            tick=tick, state_habits=live, records=records)
+        events, _, _ = tracker.observe_tick(tick=tick, state_habits=live)
+        tracker.reconcile_state_habits(live, tick=tick)
+        tracker.ack_demotion_notes(events)
+    tracker.save()
+
+
+def test_recovery_determinism_byte_identical():
+    tmp = _tmp()
+    _replay_recovery(tmp / "a.json")
+    _replay_recovery(tmp / "b.json")
+    assert (tmp / "a.json").read_bytes() == (tmp / "b.json").read_bytes()
+
+
+# -- recovery through the waking tick (cli._run_tick) --------------------------
+
+def test_waking_tick_recovers_both_live_latches_without_mint():
+    # The exact live shape, end to end: both habits at 0.64, sidecar
+    # demoted: False, both notes in the store. One waking tick heals
+    # both latches and mints nothing.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(
+        tmp,
+        **_entry(CQ, 0.72, 7),
+        **_entry(VBC, 0.68, -10000),
+    )
+    subject = _make_subject(tmp)
+    with subject._transaction():
+        st = subject.engine.state
+        st.tick = 735
+        st.habits[CQ].strength = 0.64
+        st.habits[VBC].strength = 0.64
+        mint_demotion_note(subject, {"habit_key": CQ, "dormancy_ticks": 728,
+                                     "baseline": 0.72, "demoted_tick": 735})
+        mint_demotion_note(subject, {"habit_key": VBC, "dormancy_ticks": 10735,
+                                     "baseline": 0.68, "demoted_tick": 735})
+    assert len(_demotion_notes(subject)) == 2
+    _quiet_tick(subject)  # tick 736: recovery heals both latches
+    assert len(_demotion_notes(subject)) == 2  # no new record minted
+    assert _live_strength(subject, CQ) == 0.64
+    assert _live_strength(subject, VBC) == 0.64
+    sidecar = json.loads((tmp / "authored-dormancy.json").read_text())
+    for key in (CQ, VBC):
+        entry = sidecar["habits"][key]
+        assert entry["demoted"] is True and entry["demoted_tick"] == 735
+        assert entry["owed"] is None
+    # Second tick: idempotent, sidecar byte-identical.
+    after_first = (tmp / "authored-dormancy.json").read_bytes()
+    _quiet_tick(subject)
+    assert (tmp / "authored-dormancy.json").read_bytes() == after_first
+    assert len(_demotion_notes(subject)) == 2
+
+
+def test_waking_tick_recovers_lost_latch_with_fresh_sidecar():
+    tmp = _tmp()
+    subject = _make_subject(tmp)  # no sidecar file at all
+    assert not (tmp / "authored-dormancy.json").exists()
+    with subject._transaction():
+        st = subject.engine.state
+        st.tick = 735
+        st.habits[CQ].strength = 0.64
+        # VBC's clock must be recent, or the fresh sidecar seeds it from
+        # the never-fired stamp and the normal edge demotes it this tick.
+        st.habits[VBC].last_used_tick = 735
+        mint_demotion_note(subject, {"habit_key": CQ, "dormancy_ticks": 728,
+                                     "baseline": 0.72, "demoted_tick": 735})
+    _quiet_tick(subject)  # tick 736: the seeded entry recovers at once
+    sidecar = json.loads((tmp / "authored-dormancy.json").read_text())
+    entry = sidecar["habits"][CQ]
+    assert entry["demoted"] is True and entry["demoted_tick"] == 735
+    assert entry["owed"] is None
+    assert len(_demotion_notes(subject)) == 1
+    assert _live_strength(subject, CQ) == 0.64
+    assert _live_strength(subject, VBC) == 0.68
+
+
+def test_waking_tick_without_note_raises_before_tick_advances():
+    tmp = _tmp()
+    _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 7),
+                           **_entry(VBC, 0.68, 399))
+    subject = _make_subject(tmp)
+    with subject._transaction():
+        st = subject.engine.state
+        st.tick = 735
+        st.habits[CQ].strength = 0.64
+    sidecar_before = (tmp / "authored-dormancy.json").read_bytes()
+    n_before = len(subject.workspace.records)
+    with pytest.raises(ValueError):
+        _quiet_tick(subject)
+    # The tick never advanced, the sidecar is byte-identical, and no
+    # record was appended — the fail-loud path fired before the
+    # heartbeat, before any mint.
+    assert subject.engine.state.tick == 735
+    assert (tmp / "authored-dormancy.json").read_bytes() == sidecar_before
+    assert len(subject.workspace.records) == n_before
+    assert len(_demotion_notes(subject)) == 0
+
+
+def test_waking_tick_pending_owed_raises_before_tick_advances():
+    # Critic round 1, FAIL 1, end to end: a lost latch plus a pending
+    # owed episode for a different tick must not silently drop the
+    # owed episode's mint. The waking tick raises before the heartbeat,
+    # before the tick advances, before any mint.
+    tmp = _tmp()
+    owed_400 = {"habit_key": CQ, "dormancy_ticks": 400, "baseline": 0.72,
+                "demoted_tick": 400}
+    _seed_dormancy_sidecar(
+        tmp,
+        **_entry(CQ, 0.72, 0, demoted=False, demoted_tick=None,
+                  owed=owed_400),
+        **_entry(VBC, 0.68, 399),
+    )
+    subject = _make_subject(tmp)
+    with subject._transaction():
+        st = subject.engine.state
+        st.tick = 400
+        st.habits[CQ].strength = 0.64
+        st.habits[VBC].last_used_tick = 400
+        mint_demotion_note(subject, {"habit_key": CQ, "dormancy_ticks": 399,
+                                     "baseline": 0.72, "demoted_tick": 399})
+    assert len(_demotion_notes(subject)) == 1
+    sidecar_before = (tmp / "authored-dormancy.json").read_bytes()
+    n_before = len(subject.workspace.records)
+    with pytest.raises(ValueError):
+        _quiet_tick(subject)
+    assert subject.engine.state.tick == 400  # tick never advanced
+    assert (tmp / "authored-dormancy.json").read_bytes() == sidecar_before
+    assert len(subject.workspace.records) == n_before  # no mint
+    assert len(_demotion_notes(subject)) == 1
+    sidecar = json.loads(sidecar_before)
+    assert sidecar["habits"][CQ]["owed"] == owed_400  # obligation kept
+    assert sidecar["habits"][CQ]["demoted"] is False
+
+
+def test_readonly_and_dream_leave_lost_latch_unrecovered():
+    tmp = _tmp()
+    restore = _patched_cli(tmp)
+    try:
+        _seed_dormancy_sidecar(tmp, **_entry(CQ, 0.72, 7))
+        subject = cli._subject()
+        with subject._transaction():
+            st = subject.engine.state
+            st.tick = 735
+            st.habits[CQ].strength = 0.64
+            mint_demotion_note(subject, {"habit_key": CQ,
+                                         "dormancy_ticks": 728,
+                                         "baseline": 0.72,
+                                         "demoted_tick": 735})
+        path = tmp / "authored-dormancy.json"
+        before = path.read_bytes()
+        assert cli.cmd_status(argparse.Namespace(raw=True)) == 0
+        assert path.read_bytes() == before
+        assert cli.cmd_drift(argparse.Namespace(window=50)) == 0
+        assert path.read_bytes() == before
+        subject.dream_tick()
+        assert path.read_bytes() == before
+        sidecar = json.loads(before)
+        assert sidecar["habits"][CQ]["demoted"] is False
+    finally:
+        restore()
