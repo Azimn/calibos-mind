@@ -1,77 +1,13 @@
 {
  "lifetime": {
-  "approach": 112,
+  "approach": 124,
   "explore": 20,
-  "observe": 11,
-  "rest": 15,
-  "seek_contact": 53,
-  "self_soothe": 9
+  "observe": 12,
+  "rest": 16,
+  "seek_contact": 54,
+  "self_soothe": 10
  },
  "window": [
-  [
-   1149,
-   "observe"
-  ],
-  [
-   1150,
-   "seek_contact"
-  ],
-  [
-   1151,
-   "approach"
-  ],
-  [
-   1152,
-   "approach"
-  ],
-  [
-   1153,
-   "self_soothe"
-  ],
-  [
-   1154,
-   "explore"
-  ],
-  [
-   1155,
-   "rest"
-  ],
-  [
-   1156,
-   "rest"
-  ],
-  [
-   1157,
-   "approach"
-  ],
-  [
-   1158,
-   "seek_contact"
-  ],
-  [
-   1159,
-   "seek_contact"
-  ],
-  [
-   1160,
-   "approach"
-  ],
-  [
-   1161,
-   "seek_contact"
-  ],
-  [
-   1162,
-   "approach"
-  ],
-  [
-   1163,
-   "approach"
-  ],
-  [
-   1164,
-   "seek_contact"
-  ],
   [
    1165,
    "approach"
@@ -407,6 +343,70 @@
   [
    1248,
    "seek_contact"
+  ],
+  [
+   1249,
+   "approach"
+  ],
+  [
+   1250,
+   "rest"
+  ],
+  [
+   1251,
+   "approach"
+  ],
+  [
+   1252,
+   "approach"
+  ],
+  [
+   1253,
+   "approach"
+  ],
+  [
+   1254,
+   "approach"
+  ],
+  [
+   1255,
+   "self_soothe"
+  ],
+  [
+   1256,
+   "approach"
+  ],
+  [
+   1257,
+   "approach"
+  ],
+  [
+   1258,
+   "observe"
+  ],
+  [
+   1259,
+   "approach"
+  ],
+  [
+   1260,
+   "approach"
+  ],
+  [
+   1261,
+   "seek_contact"
+  ],
+  [
+   1262,
+   "approach"
+  ],
+  [
+   1263,
+   "approach"
+  ],
+  [
+   1264,
+   "approach"
   ]
  ]
 }

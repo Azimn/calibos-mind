@@ -58,7 +58,10 @@ mint transaction commits; ``mint_demotion_note`` is idempotent on
 (habit_key, demoted_tick); ``ack_demotion_notes`` clears the mark only
 after the mint commits. A kill between mint and ack re-mints nothing
 (the idempotent mint returns the existing record's id) and the next tick
-recovers the owed episode.
+recovers the owed episode. The demotion edge itself never overwrites a
+pending owed mark: if it would fire while one is owed, it fails loud
+with ValueError before any mutation (domain 29, 2026-11-22) — the
+same discipline ``recover_lost_latches`` applies to the same state.
 
 Determinism: no wall clock, no RNG; sorted keys, rounded floats.
 Identical tick sequences produce byte-identical sidecars.
@@ -294,7 +297,13 @@ class AuthoredDormancyTracker:
         branch) is ignored; no code path restores strength. An owed
         episode from a crashed tick is re-emitted untouched: the closed
         episode's note still needs its mint (the idempotent mint skips it
-        if it already landed). The ``formed:`` namespace is never read or
+        if it already landed). Fail loud (domain 29, 2026-11-22): if
+        the demotion edge would fire while the entry already holds a
+        pending owed mark, ``observe_tick`` raises ValueError before
+        any mutation — the edge is the one writer that could silently
+        discard a pending mint obligation, and the owed mark is
+        write-ahead, so overwriting it would lose the earlier episode
+        with no trace. The ``formed:`` namespace is never read or
         written.
         """
         tick = int(tick)
@@ -303,6 +312,46 @@ class AuthoredDormancyTracker:
         state_changed = False
         if state_habits is None:
             state_habits = {}
+        # Fail loud (domain 29, 2026-11-22): the demotion edge must
+        # never overwrite a pending owed mark. The owed mark is a
+        # write-ahead mint obligation; replacing it would silently
+        # discard the earlier episode — observe_tick would never
+        # re-emit it and nothing would ever mint it. This is a
+        # pre-pass, decided for every key before the loop mutates
+        # anything (the same two-phase discipline as
+        # recover_lost_latches): a baseline re-sync or a sibling
+        # habit's demotion earlier in the same tick must not land
+        # before the raise, or in-memory state would no longer be
+        # byte-identical to before the call. The condition mirrors
+        # the edge exactly — the firing branch takes precedence (a
+        # proven firing this tick resets the clock, so the edge does
+        # not fire), and a non-dormant habit's owed episode is left
+        # alone to re-emit below. The raise names the habit, the
+        # pending episode's tick, and the tick that would have
+        # overwritten it; the caller never saves, never mints, and
+        # the owed mark stays intact for the operator to clear.
+        for key in sorted(self.authored):
+            baseline = self.authored[key]
+            if baseline < HABIT_FIRE_STRENGTH:
+                continue
+            entry = self.data["habits"].get(key)
+            if entry is None or entry["demoted"]:
+                continue
+            live = state_habits.get(key)
+            if live is None:
+                continue
+            if getattr(live, "last_used_tick", None) == tick:
+                continue  # proven firing: the edge does not fire
+            if (entry["owed"] is not None
+                    and live.strength >= HABIT_FIRE_STRENGTH
+                    and tick - entry["last_fired_tick"] > DORMANCY_TICKS):
+                raise ValueError(
+                    f"authored habit {key!r} holds a pending owed "
+                    f"demotion mint for tick "
+                    f"{entry['owed']['demoted_tick']} while dormant "
+                    f"again at tick {tick}; demoting would silently "
+                    f"discard that mint obligation, refusing to run "
+                    f"on fabricated continuity")
         for key in sorted(self.authored):
             baseline = self.authored[key]
             if baseline < HABIT_FIRE_STRENGTH:

@@ -1251,3 +1251,322 @@ def test_readonly_and_dream_leave_lost_latch_unrecovered():
         assert sidecar["habits"][CQ]["demoted"] is False
     finally:
         restore()
+
+
+# -- fail-loud on pending owed overwrite (domain 29, 2026-11-22) -----------
+# Spec: research/specs/2026-11-22-owed-overwrite.md. The demotion edge
+# unconditionally overwrote entry["owed"]: a second demotion for what is,
+# behaviorally, the same episode silently discarded the earlier
+# episode's pending mint obligation. The fix: when the edge would fire
+# with a pending owed mark, observe_tick raises ValueError before any
+# mutation — the same fail-loud discipline recover_lost_latches
+# already applies to the same state. All fixtures live in /tmp; the
+# live store is never touched.
+
+def _owed_400(key, baseline, span=400):
+    return {"habit_key": key, "dormancy_ticks": span, "baseline": baseline,
+            "demoted_tick": 400}
+
+
+def test_edge_with_pending_owed_raises_and_touches_nothing():
+    # Fitness 1: seeded entry demoted False + owed{400}, habit dormant
+    # (401 ticks since the last firing, strength 0.72 >= 0.65) ->
+    # observe_tick at tick 401 raises ValueError before the tick
+    # advances; sidecar bytes and in-memory state byte-identical to
+    # before the call; owed{400} intact; no mint event emitted.
+    tmp = _tmp()
+    owed = _owed_400(CQ, 0.72)
+    _seed_dormancy_sidecar(
+        tmp, **_entry(CQ, 0.72, 0, demoted=False, demoted_tick=None,
+                      owed=owed))
+    path = tmp / "authored-dormancy.json"
+    tracker = AuthoredDormancyTracker(path, {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 0)}
+    before = path.read_bytes()
+    data_before = json.loads(json.dumps(tracker.data))
+    with pytest.raises(ValueError) as excinfo:
+        tracker.observe_tick(tick=401, state_habits=live)
+    # The error names the habit, the pending episode's tick, and the
+    # tick that would have overwritten it.
+    msg = str(excinfo.value)
+    assert CQ in msg and "400" in msg and "401" in msg
+    assert path.read_bytes() == before  # sidecar bytes untouched
+    assert tracker.data == data_before  # no in-memory mutation either
+    entry = tracker.data["habits"][CQ]
+    assert entry["demoted"] is False and entry["owed"] == owed
+    assert entry["last_fired_tick"] == 0
+    assert live[CQ].strength == 0.72  # no projection, no reconcile
+    # The raise is stable: a second identical call raises identically
+    # and still touches nothing.
+    with pytest.raises(ValueError) as again:
+        tracker.observe_tick(tick=401, state_habits=live)
+    assert str(again.value) == msg
+    assert path.read_bytes() == before
+    assert tracker.data == data_before
+
+
+def test_edge_with_pending_owed_leaves_sibling_unmutated():
+    # The raise is decided for every key before the loop mutates
+    # anything: CQ sorts before VBC and would demote in this same tick
+    # (owed None), but VBC's pending owed mark must abort the tick
+    # before CQ's demotion lands in memory. An in-branch check would
+    # leave CQ half-demoted when the raise fired.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(
+        tmp,
+        **_entry(CQ, 0.72, 0),
+        **_entry(VBC, 0.68, 0, demoted=False, demoted_tick=None,
+                  owed=_owed_400(VBC, 0.68)),
+    )
+    path = tmp / "authored-dormancy.json"
+    tracker = AuthoredDormancyTracker(path, {CQ: 0.72, VBC: 0.68})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 0),
+            VBC: Habit(VBC, "uncertainty", Action.OBSERVE, 0.68, 3, 0)}
+    before = path.read_bytes()
+    data_before = json.loads(json.dumps(tracker.data))
+    with pytest.raises(ValueError) as excinfo:
+        tracker.observe_tick(tick=401, state_habits=live)
+    msg = str(excinfo.value)
+    assert VBC in msg and "400" in msg and "401" in msg
+    assert path.read_bytes() == before
+    assert tracker.data == data_before
+    assert tracker.data["habits"][CQ]["demoted"] is False
+    assert tracker.data["habits"][VBC]["owed"] == _owed_400(VBC, 0.68)
+    assert live[CQ].strength == 0.72 and live[VBC].strength == 0.68
+
+
+def test_pending_owed_with_proven_firing_does_not_raise():
+    # The firing branch takes precedence over the edge: a proven
+    # bypass firing this tick resets the clock, so the edge does not
+    # fire and the pending owed episode re-emits untouched instead of
+    # raising. The guard is edge-gated, not owed-gated.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(
+        tmp, **_entry(CQ, 0.72, 0, demoted=False, demoted_tick=None,
+                      owed=_owed_400(CQ, 0.72)))
+    tracker = AuthoredDormancyTracker(
+        tmp / "authored-dormancy.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 401)}
+    events, sc, stc = tracker.observe_tick(tick=401, state_habits=live)
+    assert events == [_owed_400(CQ, 0.72)]  # the owed episode re-emits
+    assert tracker.data["habits"][CQ]["last_fired_tick"] == 401
+    assert tracker.data["habits"][CQ]["demoted"] is False
+    assert live[CQ].strength == 0.72
+
+
+def test_pending_owed_reemits_without_raise_when_not_dormant():
+    # Same guard, other side: only 51 dormant ticks at tick 401, so
+    # the edge would not fire — the owed episode re-emits for its mint
+    # and nothing raises. A pending owed mark alone is the normal
+    # crash-recovery shape, not an inconsistency.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(
+        tmp, **_entry(CQ, 0.72, 350, demoted=False, demoted_tick=None,
+                      owed=_owed_400(CQ, 0.72)))
+    tracker = AuthoredDormancyTracker(
+        tmp / "authored-dormancy.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 350)}
+    events, sc, stc = tracker.observe_tick(tick=401, state_habits=live)
+    assert events == [_owed_400(CQ, 0.72)]
+    assert not stc  # no demotion, no projection
+    assert tracker.data["habits"][CQ]["demoted"] is False
+    assert tracker.data["habits"][CQ]["owed"] == _owed_400(CQ, 0.72)
+
+
+def test_normal_edge_demotes_exactly_once_then_reemits_owed():
+    # Fitness 2: owed None, dormant, strength >= 0.65 -> demotes
+    # exactly once; a second observe_tick at the next tick (mint not
+    # yet acked — the crash shape) emits the same owed episode again
+    # and mints nothing twice.
+    tmp = _tmp()
+    tracker = AuthoredDormancyTracker(tmp / "d.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 0)}
+    events, sc, stc = tracker.observe_tick(tick=400, state_habits=live)
+    assert len(events) == 1 and stc
+    assert events[0] == {"habit_key": CQ, "dormancy_ticks": 400,
+                         "baseline": 0.72, "demoted_tick": 400}
+    tracker.reconcile_state_habits(live, tick=400)
+    assert live[CQ].strength == 0.64
+    tracker.save()
+    # No ack: the mint never committed. The next tick re-emits the
+    # same episode — same identity, no second demotion.
+    events2, sc2, stc2 = tracker.observe_tick(tick=401, state_habits=live)
+    assert events2 == events  # the same owed episode, untouched
+    assert tracker.data["habits"][CQ]["demoted_tick"] == 400
+    assert live[CQ].strength == 0.64
+    # Minting the re-emitted episode is idempotent on the episode
+    # identity: one note, ever, for this demotion.
+    subject = _make_subject(tmp)
+    with subject._transaction():
+        first = mint_demotion_note(subject, events2[0])
+        second = mint_demotion_note(subject, events2[0])
+        assert first == second
+    assert len(_demotion_notes(subject)) == 1
+
+
+def test_already_demoted_owed_reemits_untouched_and_reprojects():
+    # Fitness 3: demoted True + owed (crash between the sidecar save
+    # and the reconcile commit) still re-emits the episode untouched
+    # and still re-derives the strength projection.
+    tmp = _tmp()
+    tracker = AuthoredDormancyTracker(tmp / "d.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 0)}
+    events, sc, stc = tracker.observe_tick(tick=400, state_habits=live)
+    assert len(events) == 1 and stc
+    tracker.save()  # write-ahead: demoted True (+owed) durable...
+    # ...KILL: reconcile never ran, mint never ran, ack never ran.
+    assert live[CQ].strength == 0.72
+    recovered = AuthoredDormancyTracker(tmp / "d.json", {CQ: 0.72})
+    events, sc, stc = recovered.observe_tick(tick=401, state_habits=live)
+    assert events == [{"habit_key": CQ, "dormancy_ticks": 400,
+                       "baseline": 0.72, "demoted_tick": 400}]
+    assert stc  # the projection re-derives
+    recovered.reconcile_state_habits(live, tick=401)
+    assert live[CQ].strength == 0.64
+    assert recovered.data["habits"][CQ]["demoted"] is True
+    assert recovered.data["habits"][CQ]["demoted_tick"] == 400
+
+
+def test_ack_clears_only_on_matching_demoted_tick():
+    # Fitness 4: ack_demotion_notes clears only when demoted_tick
+    # matches the event; a mismatched ack — or one naming another
+    # habit — leaves the mark.
+    tmp = _tmp()
+    tracker = AuthoredDormancyTracker(tmp / "d.json", {CQ: 0.72})
+    live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 0)}
+    events, _, _ = tracker.observe_tick(tick=400, state_habits=live)
+    assert len(events) == 1
+    owed = dict(events[0])
+    tracker.ack_demotion_notes(
+        [{"habit_key": CQ, "demoted_tick": 401}])  # wrong tick
+    assert tracker.data["habits"][CQ]["owed"] == owed
+    tracker.ack_demotion_notes(
+        [{"habit_key": VBC, "demoted_tick": 400}])  # wrong habit
+    assert tracker.data["habits"][CQ]["owed"] == owed
+    tracker.ack_demotion_notes(events)  # the matching ack clears it
+    assert tracker.data["habits"][CQ]["owed"] is None
+    assert tracker.data["habits"][CQ]["demoted"] is True
+
+
+def test_readonly_and_dream_leave_pending_owed_sidecar_byte_identical():
+    # Fitness 5, read-only half: a sidecar holding a pending owed
+    # mark is byte-identical after every read-only command and after
+    # a dream tick — none of them may demote, mint, or write.
+    tmp = _tmp()
+    restore = _patched_cli(tmp)
+    try:
+        _seed_dormancy_sidecar(
+            tmp, **_entry(CQ, 0.72, 0, demoted=False, demoted_tick=None,
+                          owed=_owed_400(CQ, 0.72)))
+        subject = cli._subject()
+        path = tmp / "authored-dormancy.json"
+        before = path.read_bytes()
+        assert cli.cmd_status(argparse.Namespace(raw=True)) == 0
+        assert path.read_bytes() == before
+        assert cli.cmd_drift(argparse.Namespace(window=50)) == 0
+        assert path.read_bytes() == before
+        assert cli.cmd_review(argparse.Namespace(n=5)) == 0
+        assert path.read_bytes() == before
+        assert cli.cmd_relationships(argparse.Namespace()) == 0
+        assert path.read_bytes() == before
+        subject.dream_tick()
+        assert path.read_bytes() == before
+        # The dream tick records dream thoughts of its own; what must
+        # not appear is a demotion note.
+        assert len(_demotion_notes(subject)) == 0  # no mint
+        sidecar = json.loads(before)
+        assert sidecar["habits"][CQ]["owed"] == _owed_400(CQ, 0.72)
+        assert sidecar["habits"][CQ]["demoted"] is False
+    finally:
+        restore()
+
+
+def test_init_force_wipes_sidecar_holding_pending_owed():
+    # Fitness 5, reseed half: init --force wipes the sidecar even
+    # when it holds a pending owed mark — a reseed starts with no
+    # dormancy history at all.
+    tmp = _tmp()
+    restore = _patched_cli(tmp)
+    try:
+        dorm = tmp / "authored-dormancy.json"
+        dorm.write_text(json.dumps({"habits": {
+            CQ: {"baseline": 0.72, "last_fired_tick": 0, "demoted": False,
+                 "demoted_tick": None,
+                 "owed": _owed_400(CQ, 0.72)}}}), encoding="utf-8")
+        assert cli.cmd_init(argparse.Namespace(force=True)) == 0
+        assert not dorm.exists()
+        fresh = AuthoredDormancyTracker(dorm, {CQ: 0.72})
+        assert fresh.data == {"habits": {}}
+    finally:
+        restore()
+
+
+def test_waking_tick_pending_owed_raises_before_mint():
+    # Fitness 1, end to end: the live shape — CQ dormant with a
+    # pending owed{400} at strength 0.72 — must fail loud on the
+    # waking tick. The heartbeat has already run (it precedes the
+    # dormancy block in _run_tick, as for every tracker), so the
+    # engine tick has advanced to 401; what the raise precedes is
+    # any dormancy mutation, any mint, and any sidecar write.
+    tmp = _tmp()
+    _seed_dormancy_sidecar(
+        tmp,
+        **_entry(CQ, 0.72, 0, demoted=False, demoted_tick=None,
+                  owed=_owed_400(CQ, 0.72)),
+        **_entry(VBC, 0.68, 400),
+    )
+    subject = _make_subject(tmp)
+    with subject._transaction():
+        st = subject.engine.state
+        st.tick = 400
+        st.habits[CQ].last_used_tick = 0
+        st.habits[VBC].last_used_tick = 400
+    sidecar_before = (tmp / "authored-dormancy.json").read_bytes()
+    with pytest.raises(ValueError) as excinfo:
+        _quiet_tick(subject)
+    msg = str(excinfo.value)
+    assert CQ in msg and "400" in msg and "401" in msg
+    assert subject.engine.state.tick == 401  # heartbeat already ran
+    assert (tmp / "authored-dormancy.json").read_bytes() == sidecar_before
+    assert len(_demotion_notes(subject)) == 0  # no mint
+    assert _live_strength(subject, CQ) == 0.72  # no projection
+    sidecar = json.loads(sidecar_before)
+    assert sidecar["habits"][CQ]["owed"] == _owed_400(CQ, 0.72)
+    assert sidecar["habits"][CQ]["demoted"] is False
+    assert sidecar["habits"][VBC]["demoted"] is False  # sibling untouched
+
+
+def test_fail_loud_path_is_deterministic():
+    # Fitness 6: identical sequences -> byte-identical sidecars,
+    # including the fail-loud path — two runs raise identically,
+    # bytes untouched.
+    tmp = _tmp()
+    for name in ("a", "b"):
+        path = tmp / f"{name}.json"
+        path.write_text(json.dumps({"habits": {
+            CQ: {"baseline": 0.72, "last_fired_tick": 0, "demoted": False,
+                 "demoted_tick": None, "owed": _owed_400(CQ, 0.72)},
+            VBC: {"baseline": 0.68, "last_fired_tick": 400,
+                  "demoted": False, "demoted_tick": None,
+                  "owed": None}}}), encoding="utf-8")
+    messages = []
+    for name in ("a", "b"):
+        path = tmp / f"{name}.json"
+        tracker = AuthoredDormancyTracker(path, {CQ: 0.72, VBC: 0.68})
+        # Normalize the seed to the tracker's own serialization first:
+        # save() re-writes with indent=1, so the raw json.dumps seed
+        # bytes are not the byte baseline.
+        tracker.save()
+        before = path.read_bytes()
+        live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 0),
+                VBC: Habit(VBC, "uncertainty", Action.OBSERVE, 0.68,
+                           3, 400)}
+        with pytest.raises(ValueError) as excinfo:
+            tracker.observe_tick(tick=401, state_habits=live)
+        messages.append(str(excinfo.value))
+        assert path.read_bytes() == before
+        assert tracker.data["habits"][CQ]["owed"] == _owed_400(CQ, 0.72)
+        tracker.save()  # no mutation happened, so the save is a no-op
+        assert path.read_bytes() == before
+    assert messages[0] == messages[1]  # identical raise, twice
+    assert (tmp / "a.json").read_bytes() == (tmp / "b.json").read_bytes()

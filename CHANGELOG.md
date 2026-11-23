@@ -11,6 +11,55 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-22 — Demotion edge fails loud on a pending owed mark (Domain 29)
+
+Spec: `research/specs/2026-11-22-owed-overwrite.md`. Follow-up to the
+2026-11-21 lost-latch loop: the demotion edge in
+`AuthoredDormancyTracker.observe_tick` unconditionally overwrote
+`entry["owed"]`, so a second demotion for what is, behaviorally, the
+same episode silently discarded the earlier episode's pending mint
+obligation (owed{400} lost to owed{401}) — no re-emit, no trace, and a
+demotion note dated at the later tick for an episode whose behavioral
+demotion happened at the earlier one.
+
+Fix (`calibos_mind/authored_dormancy.py`, `observe_tick` only): a
+pre-pass decides for every authored key, before the loop mutates
+anything, whether the demotion edge would fire with a pending owed
+mark; if so it raises ValueError naming the habit, the pending
+episode's tick, and the tick that would have overwritten it. The
+pre-pass mirrors the edge exactly (the proven-firing branch takes
+precedence, so a firing this tick still resets the clock and the owed
+episode re-emits; a non-dormant habit's owed episode re-emits
+untouched) and is two-phase like `recover_lost_latches`, so a baseline
+re-sync or a sibling habit's demotion earlier in the same tick cannot
+land before the raise. No other behavior changes: the normal edge
+still demotes exactly once, the already-demoted crash-recovery branch
+still re-emits and re-projects, `ack_demotion_notes` still clears only
+on a matching `demoted_tick`.
+
+Fitness: 11 new tests in `tests/test_authored_dormancy.py` (fail-loud
+with sidecar bytes and in-memory state untouched and owed intact,
+including the sibling-unmutated case; firing-precedence and
+non-dormant re-emit; exact-once demotion plus re-emit; crash-recovery
+re-emit and re-projection; ack matching; read-only/dream isolation
+and `init --force` wipe of a pending-owed sidecar; determinism of the
+fail-loud path; the waking-tick end-to-end raise). The four fail-loud
+tests were verified to fail against the pre-fix code (stash check) and
+pass with the fix. Full suite: `tests/` 1397 passed, 1 xfailed;
+`home_sim` 188 passed, 17 subtests passed — green.
+
+Note: at the subject level the engine tick has already advanced when
+the raise fires — the heartbeat precedes the dormancy block in
+`_run_tick`, as for every tracker — so the raise precedes any
+dormancy mutation, mint, or sidecar write, not the heartbeat's own
+tick advance. The spec's "before the tick advances" is exact at the
+tracker level; the waking-tick test pins the true subject-level
+behavior (tick 401, no mint, sidecar byte-identical, owed intact).
+
+Revert signal: `observe_tick` raises on a healthy store (no pending
+owed mark), or fails to demote a genuinely dormant habit with owed
+None. Assess after 2026-12-06.
+
 ## 2026-11-21 — Hard-boundary test made order-independent
 
 The full suite went red on one test: `home_sim/tests/test_home_sim.py::TestHardBoundary::test_import_pulls_no_mind_package`. It asserted that no `calibos_mind` module was in `sys.modules` at the moment it ran — but in a full-suite run other test modules legitimately import `calibos_mind` into the shared pytest process first, so the assertion failed on run order, not on any real boundary violation. The source-level scans (no forbidden references, no mind import statements) passed, and the test passed standalone. Fix: the test now checks the property it names — that importing `home_sim` alone does not pull the mind package in — in a fresh interpreter subprocess, so it holds regardless of what the test process already imported. Verified by running it in one process after a mind-importing test file (51 passed). Full-suite re-run after the fix: 1520 passed, 1 xfailed, 17 subtests passed — green.
