@@ -119,18 +119,19 @@ def test_missing_entry_dormant_demotes_fresh_without_raise():
     assert tracker.data["habits"][CQ]["demoted"] is True
 
 
-def test_subthreshold_baseline_with_owed_does_not_raise():
+def test_subthreshold_baseline_with_owed_reemits_without_raise():
     # Authored baseline below the bypass threshold: the edge never
-    # fires for this habit, so the pre-pass must not raise. MEASURED
-    # (and verified identical on the pristine pre-fix worktree): the
-    # loop's `continue` on baseline < 0.65 skips the whole iteration
-    # INCLUDING the owed re-emit, so no event is emitted — a pending
-    # owed mark on a sub-threshold entry is never re-emitted. That is
-    # pre-existing domain-27 loop behavior, not something this mutation
-    # introduced (the edge could only have minted that owed mark while
-    # the baseline was >= 0.65, so the state is reachable only via a
-    # cartridge baseline change or a hand edit). This test pins the
-    # measured behavior: no raise, no demotion, owed intact, no event.
+    # fires for this habit, so the pre-pass must not raise. SUPERSEDED
+    # 2026-11-23 (spec research/specs/2026-11-23-owed-reemit-
+    # subthreshold.md, domain 30): the 2026-11-22 version of this test
+    # pinned the pre-fix behavior — the loop's `continue` on baseline
+    # < 0.65 skipped the whole iteration INCLUDING the owed re-emit,
+    # so no event was emitted and a pending owed mark on a
+    # sub-threshold entry stalled silently. That was the defect the
+    # 11-23 spec fixes (critic observation 2 from the 11-22 loop): the
+    # owed mark is a write-ahead mint obligation and must re-emit for
+    # every baseline until acked. This test now pins the FIXED
+    # behavior: no raise, no demotion, owed intact, event re-emitted.
     tmp = T._tmp()
     T._seed_dormancy_sidecar(
         tmp, **T._entry(CQ, 0.60, 0, demoted=False, demoted_tick=None,
@@ -139,7 +140,7 @@ def test_subthreshold_baseline_with_owed_does_not_raise():
         tmp / "authored-dormancy.json", {CQ: 0.60})
     live = {CQ: Habit(CQ, "curiosity", Action.EXPLORE, 0.72, 2, 0)}
     events, sc, stc = tracker.observe_tick(tick=401, state_habits=live)
-    assert events == []
+    assert events == [_owed(CQ, 0.60)]  # the owed episode re-emits
     assert tracker.data["habits"][CQ]["demoted"] is False
     assert tracker.data["habits"][CQ]["owed"] == _owed(CQ, 0.60)
     assert not stc

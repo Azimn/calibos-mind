@@ -60,6 +60,77 @@ Revert signal: `observe_tick` raises on a healthy store (no pending
 owed mark), or fails to demote a genuinely dormant habit with owed
 None. Assess after 2026-12-06.
 
+## 2026-11-23 — Owed re-emit under a sub-threshold baseline (Domain 30)
+
+Spec: `research/specs/2026-11-23-owed-reemit-subthreshold.md`.
+Follow-up to the 2026-11-22 owed-overwrite loop (critic observation 2,
+pre-existing and out of that spec's scope): `observe_tick`'s main loop
+`continue`d on baseline < 0.65, skipping the whole iteration including
+the owed re-emit — so an entry whose baseline dropped below 0.65 (a
+cartridge baseline change, which ships with a store migration, or a
+hand edit) while holding a pending owed mark never re-emitted its owed
+demotion episode. The mint obligation was stranded: still in the
+sidecar, never emitted, never acked, silently stalled forever. The
+fail-loud pre-pass has the same skip, so it never raised either. The
+same skip also stranded the crash-recovery re-derivation: a
+sub-threshold entry whose store still held the pre-demotion strength
+never got its projection re-derived, so a minted note could claim a
+demotion that never behaviorally happened.
+
+Fix (`calibos_mind/authored_dormancy.py`, `observe_tick` only): the
+loop now runs the owed re-emit and the crash-recovery re-derivation
+for every baseline. The sub-threshold skip covers only the demotion
+edge, the firing branch, and the clock reset — no new demotion may
+fire below threshold, and no strength projection change happens
+beyond the existing crash-recovery re-derivation. A sub-threshold
+habit with no sidecar entry stays untracked (nothing to re-emit,
+nothing to re-derive); the baseline re-sync still runs for existing
+entries. The fail-loud pre-pass keeps its scope (it mirrors the edge,
+which cannot fire below threshold) with a comment recording why its
+silence is benign: the owed mark now re-emits instead of stalling.
+No changes to `recover_lost_latches`, the mint idempotency rule, the
+one-episode ratchet, or any other module. No cartridge change, no
+store migration.
+
+Tests: 19 new builder tests in
+`tests/test_authored_dormancy_subthreshold.py` covering every fitness
+item (the spec seed re-emitting at ticks 401/402 until acked;
+crash-recovery re-derivation with live strength 0.65; no-owed
+no-change with the exact flags; the 0.65-fires / 0.649-never-demotes
+boundary; at-threshold replays byte-identical to pre-change goldens
+captured on the pristine worktree; read-only/dream byte-identical and
+`init --force` wipe of a sub-threshold pending-owed sidecar;
+determinism of the re-emit path and of the fail-loud path with a
+sub-threshold sibling). One existing test updated, deliberately:
+`tests/adversarial/test_critic_2026_11_22_owed_overwrite.py::test_subthreshold_baseline_with_owed_does_not_raise`
+pinned the pre-fix behavior (`events == []`) — the spec supersedes
+it, so it now pins the fixed behavior (renamed
+`test_subthreshold_baseline_with_owed_reemits_without_raise`). The
+nine behavior tests fail against the pre-fix code (stash check) and
+pass with the fix; the three golden at-threshold tests pass on both,
+as designed. Full suite: `tests/` 1425 passed, 1 xfailed — green.
+
+Known boundary (unchanged, pre-existing):
+`reconcile_state_habits` is untouched and runs only when
+`state_changed` is True; a non-demoted sub-threshold entry with a
+hand-set live strength >= 0.65 and a firing stamp this tick could
+still be targeted at its baseline by a reconcile another entry
+triggered — the same shape the at-threshold firing path already has,
+and `observe_tick` itself never reports `state_changed` for it.
+
+Revert signal: `observe_tick` raises on a healthy store (no pending
+owed mark, no demotion due), or fails to demote a genuinely dormant
+habit with `owed=None` at an at-threshold baseline. A sub-threshold
+baseline demotes a habit, mints a new demotion note, or changes a
+live strength outside the crash-recovery re-derivation. An owed
+episode is emitted twice for one mint (the mint is idempotent, so
+this is about the events list carrying duplicates in one call). Any
+existing test regresses; any write from a read-only or dream path.
+In vivo: the live sidecar holds no pending owed marks (both authored
+habits `demoted=True`, `owed=null`, verified 2026-11-22), so a
+fail-loud or a re-emit in vivo after shipping would itself be a
+defect to adjudicate, not a silent loss. Assess after 2026-12-07.
+
 ## 2026-11-21 — Hard-boundary test made order-independent
 
 The full suite went red on one test: `home_sim/tests/test_home_sim.py::TestHardBoundary::test_import_pulls_no_mind_package`. It asserted that no `calibos_mind` module was in `sys.modules` at the moment it ran — but in a full-suite run other test modules legitimately import `calibos_mind` into the shared pytest process first, so the assertion failed on run order, not on any real boundary violation. The source-level scans (no forbidden references, no mind import statements) passed, and the test passed standalone. Fix: the test now checks the property it names — that importing `home_sim` alone does not pull the mind package in — in a fresh interpreter subprocess, so it holds regardless of what the test process already imported. Verified by running it in one process after a mind-importing test file (51 passed). Full-suite re-run after the fix: 1520 passed, 1 xfailed, 17 subtests passed — green.

@@ -66,6 +66,17 @@ same discipline ``recover_lost_latches`` applies to the same state.
 Determinism: no wall clock, no RNG; sorted keys, rounded floats.
 Identical tick sequences produce byte-identical sidecars.
 
+Sub-threshold owed re-emit (domain 30, 2026-11-23): an entry whose
+authored baseline has dropped below 0.65 (reachable only via a
+cartridge baseline change, which ships with a store migration, or a
+hand edit) still re-emits a pending owed mark on every waking tick
+until acked, and still re-derives a crashed strength projection. The
+sub-threshold skip in observe_tick covers only the demotion edge, the
+firing branch, and the clock reset — never the re-emit and never the
+re-derivation. No new demotion may fire below threshold. A habit with
+no sidecar entry at all stays untracked below threshold (nothing to
+re-emit, nothing to re-derive).
+
 Lost-latch recovery (domain 28, 2026-11-21): the sidecar can lose a
 demotion latch the store still records (the live store holds both
 demotion notes while authored-dormancy.json says demoted: False), and
@@ -288,7 +299,13 @@ class AuthoredDormancyTracker:
         including the crash-recovery case where the sidecar holds
         demoted=True (+owed) but the store never received the projection
         (a kill between the sidecar save and the reconcile commit): the
-        projection re-derives so the owed note stays truthful.
+        projection re-derives so the owed note stays truthful. A pending
+        owed mark re-emits on every waking tick until acked, for every
+        baseline — a sub-threshold baseline (below 0.65) skips only the
+        demotion edge, the firing branch, and the clock reset, never the
+        re-emit or the crash-recovery re-derivation (domain 30,
+        2026-11-23); no new demotion may fire below threshold, and a
+        sub-threshold habit with no sidecar entry stays untracked.
 
         A firing (the engine's ``last_used_tick`` stamp equals this tick),
         pre-demotion only, resets the dormancy clock — silently. The
@@ -333,6 +350,13 @@ class AuthoredDormancyTracker:
         for key in sorted(self.authored):
             baseline = self.authored[key]
             if baseline < HABIT_FIRE_STRENGTH:
+                # Sub-threshold: the demotion edge cannot fire here, so
+                # the pre-pass stays silent — and that silence is benign,
+                # not a loss (domain 30, 2026-11-23). The pre-pass only
+                # guards the edge's overwrite, which cannot happen below
+                # threshold; the main loop below re-emits any pending owed
+                # mark for a sub-threshold entry on every waking tick
+                # until acked, so no mint obligation can stall here.
                 continue
             entry = self.data["habits"].get(key)
             if entry is None or entry["demoted"]:
@@ -354,12 +378,15 @@ class AuthoredDormancyTracker:
                     f"on fabricated continuity")
         for key in sorted(self.authored):
             baseline = self.authored[key]
-            if baseline < HABIT_FIRE_STRENGTH:
-                # Never held the bypass privilege; nothing to demote.
-                continue
             entry = self.data["habits"].get(key)
             live = state_habits.get(key)
             if entry is None:
+                if baseline < HABIT_FIRE_STRENGTH:
+                    # Never held the bypass privilege and no sidecar
+                    # entry exists: nothing to demote, no owed mark to
+                    # re-emit, no demotion to re-derive. Untracked —
+                    # a fresh sub-threshold habit seeds no entry.
+                    continue
                 entry = {"baseline": baseline,
                          "last_fired_tick": self._seed_last_fired(live),
                          "demoted": False, "demoted_tick": None,
@@ -372,7 +399,22 @@ class AuthoredDormancyTracker:
                 # defensive only).
                 entry["baseline"] = baseline
                 sidecar_changed = True
-            if live is None:
+            if baseline < HABIT_FIRE_STRENGTH:
+                # Sub-threshold (domain 30, 2026-11-23): the habit never
+                # held the bypass privilege, so the demotion edge, the
+                # firing branch, and the clock reset are all skipped —
+                # no new demotion may fire here, ever. But the two
+                # branches below are NOT demotion logic: the
+                # crash-recovery re-derivation and the owed re-emit run
+                # for every baseline. A pending owed mark is a
+                # write-ahead mint obligation, and the old `continue`
+                # stranded it silently (the pre-pass above mirrors the
+                # edge, which cannot fire below threshold, so it never
+                # raised either). The obligation re-emits until acked.
+                if (entry["demoted"] and live is not None
+                        and live.strength != DEMOTED_STRENGTH):
+                    state_changed = True
+            elif live is None:
                 # No live entry: nothing to prove or project, but an owed
                 # episode still needs its mint.
                 pass
