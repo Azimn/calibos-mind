@@ -11,6 +11,64 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-24 — Loss ledger (`mind stakes`) (Domain 31)
+
+Spec: `research/specs/2026-11-24-loss-ledger.md`. Article 31 follow-up:
+the mind's only losses were passive decay, and the one genuine bypass
+loss on record (the hunger habit falling 0.70 to 0.45) existed only as
+a number in `mind drift`, with no event marking when it lost bypass or
+what that cost.
+
+New tracker `calibos_mind/stakes.py` plus a read-only `mind stakes`
+command. Sidecar `stakes.json`: `{"losses": [...], "seen_habits":
+{"<formed:...>": <last observed strength>}}`. Two loss kinds, both
+observed on waking ticks only (fed from `cli._run_tick` after the
+habits reconcile and the dormancy demotion, so the strengths read are
+this tick's reconciled ones):
+
+- Habit bypass loss: a `formed:` habit at or above the 0.65 bypass
+  threshold at the last observation and below it now — one row per
+  crossing episode (habit, tick, before/after strengths exact). The
+  latch is the stored baseline itself: recovery to >= 0.65 and a later
+  re-decay mints a second row. First seen already below 0.65 mints
+  nothing (no backfill); exactly 0.65 stays above the line. The
+  threshold is imported from `counterfactual.HABIT_FIRE_STRENGTH`,
+  not redefined.
+- Broken commitment: a commitment with status `broken` and no row yet
+  — one row per breakage (id, description, engine resolving tick,
+  outcome text), including one first seen already broken, which is a
+  store-documented event (the engine stamps `resolved_tick` and
+  `outcome`), not backfill. Kept and released mint nothing.
+
+`report()` is a pure read: formed habits at or above 0.65 (what disuse
+would cost), open commitments with due tick where present, losses most
+recent first capped at 20, counts by kind. No losses prints "no losses
+recorded" explicitly; a fresh store reports empty state and mints no
+sidecar. Corrupt sidecar fails loud at construction (including a
+crossing-invariant violation and duplicate rows); `init --force` wipes
+the sidecar. Deterministic, atomic save (temp + fsync + replace).
+
+Fitness: 26 new tests in `tests/test_stakes.py` (unit boundary tests on
+a fake subject plus end-to-end silence-decay crossing at tick 216,
+broken-commitment wiring, read-only/dream byte-identity, init wipe,
+fail-loud before the tick advances, CLI output). No engine, cartridge,
+conduct, or gate change; no other tracker's behavior changes.
+
+Backup (2026-11-24): `stakes.json` is local-only (`.gitignore`) — the
+ledger holds verbatim commitment descriptions and outcome text, so it
+is never tracked, like the other sidecars. No decision recorded to
+track it; local-only is the correct call.
+
+Critic round 3 (2026-11-24): `save()` writes `stakes.json.tmp` in the
+repo root and removes it only via `os.replace`, so a crash or kill
+between the write and the replace leaves the shadow holding the full
+ledger body, and `.gitignore` had no entry covering it — the next daily
+backup (`git add -A`) would have committed and pushed it. Fix is a
+blanket `*.tmp` entry in `.gitignore`: the systemic close, since
+followthrough.py, habits.py, and authored_dormancy.py all write the
+same `<sidecar>.tmp` pattern. Verified no tracked file ends in `.tmp`
+and no code path expects a `.tmp` file committed.
+
 ## 2026-11-22 — Demotion edge fails loud on a pending owed mark (Domain 29)
 
 Spec: `research/specs/2026-11-22-owed-overwrite.md`. Follow-up to the

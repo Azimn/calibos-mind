@@ -23,19 +23,23 @@ ROOM_LABELS = {
 # separately (any room -> any other room). Lamp ops are universal.
 # Sensory verbs, quiet, sit, and note-writing are universal too; the
 # proposer only ever offers them where the rhythm itself allows them.
+# The mug verbs are in every room: the mug can be set down anywhere,
+# and taken up or sipped wherever it is — custody is the gate, not the
+# room. (The night proposer still never takes or sips; see tick.py.)
 AFFORDANCES = {
     "study": ("read", "write", "tidy", "take_book", "put_book", "bookmark",
               "watch_fish", "name_fish", "listen", "touch", "smell",
-              "taste", "quiet", "sit", "write_note", "read_diary"),
+              "taste", "quiet", "sit", "write_note", "read_diary",
+              "take_mug", "put_mug", "sip"),
     "kitchen": ("prepare_meal", "eat", "brew_tea", "store_produce", "tidy",
-                "take_mug", "put_mug", "take_plate", "put_plate", "sip_tea",
+                "take_mug", "put_mug", "take_plate", "put_plate", "sip",
                 "listen", "touch", "smell", "taste", "quiet", "sit",
                 "write_note"),
     "garden": ("tend_garden", "harvest", "listen", "touch", "smell",
-               "quiet", "sit", "write_note"),
+               "quiet", "sit", "write_note", "take_mug", "put_mug", "sip"),
     "rest": ("sleep", "rest", "open_wardrobe", "wear_outfit", "wear_item",
              "remove_item", "listen", "touch", "smell", "quiet", "sit",
-             "write_note"),
+             "write_note", "take_mug", "put_mug", "sip"),
 }
 
 UNIVERSAL_OPS = ("look", "move", "light_lamp", "douse_lamp")
@@ -79,7 +83,7 @@ ACTIVITY_PHRASES = {
     "listen": "listening",
     "take_mug": "taking up the mug",
     "put_mug": "setting the mug down",
-    "sip_tea": "sipping tea",
+    "sip": "sipping tea",
     "take_plate": "taking up the plate",
     "put_plate": "setting the plate down",
     "take_book": "taking up a book",

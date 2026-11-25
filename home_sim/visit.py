@@ -89,7 +89,7 @@ def shortlist_lines(home: Home) -> tuple[list[str], list[tuple[str, dict]]]:
     sim time) offer it again. The resident can always type "move garden"
     freely; this only keeps the suggestion honest.
     """
-    shortlist, _chosen = home.proposer.propose(home.state)
+    shortlist, _chosen = home.proposer.propose(home.state, night=False)
     if not rhythm._daylight(home.state["minute"]):
         shortlist = [(op, args) for op, args in shortlist
                      if not (op == "move" and args.get("to") == "garden")]

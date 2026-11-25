@@ -91,6 +91,7 @@ time. This list grows; nothing is ever removed.
   measured 0.833). A red test whose premise contradicts measured behavior is a
   test-side correction, not a code defect — prove it with a pre-fix baseline
   before adjudicating.
+- **Atomic-save shadows are publishable files** (2026-11-24): a tracker that writes `<sidecar>.tmp` + `os.replace` leaves the full sidecar body on disk if killed between the write and the replace — and the daily backup's `git add -A` stages it. Proven end-to-end in the stakes loop (round-2 FAIL: `stakes.json.tmp` with verbatim commitment text staged by the backup). The class generalizes to every `<sidecar>.tmp` writer (stakes, followthrough, habits, authored_dormancy, consolidate mkstemp). Every new sidecar that atomic-saves must have its `.tmp` shadow ignored (blanket `*.tmp` in `.gitignore` since 2026-11-24) or live in an ignored dir; the critic must dry-run `git add -A` with a planted leftover shadow.
 - **CLI construction is never mtime-silent** (2026-09-26): `cli._subject()`
   construction itself rewrites the SQLite payload row (the frozen engine's
   `__init__` runs INSERT OR REPLACE unconditionally). No CLI command can be

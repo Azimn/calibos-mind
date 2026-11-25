@@ -172,7 +172,9 @@ class TestGardenAtNight(unittest.TestCase):
             h2.state["minute"] = 600
             # Same seed, same state: the filter must be a no-op in
             # daylight, so the visit shortlist equals the raw proposal.
-            raw, _ = h1.proposer.propose(h1.state)
+            # The raw proposal is the visit-mode one (night=False):
+            # the visit shortlist is a visit proposal, not a night's.
+            raw, _ = h1.proposer.propose(h1.state, night=False)
             _, filtered = shortlist_lines(h2)
             self.assertEqual(raw, filtered)
             # And the garden does get offered in daylight sometimes.

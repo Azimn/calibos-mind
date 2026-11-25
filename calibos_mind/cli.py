@@ -35,6 +35,7 @@ indefinitely. Quick reference:
     mind relationships                   contact gap per relationship, staleness flag past 500 ticks (read-only)
     mind goals                           goal-structure signals: open commitments/expectations, tension span, newly-formed goals
     mind followthrough                   realization follow-through: whether recorded realizations are followed by conduct change (read-only)
+    mind stakes                          loss ledger: documented losses and current at-risk stakes (read-only)
     mind predictions                     prediction-error traces: counts, trace rate over the last 100 prediction-carrying events, recent + largest errors (read-only)
     mind consolidate [--list]          dry-run consolidation scan (read-only); dedup/supersede/flag proposals to journal
     mind consolidate --accept <id>...  accept proposal(s): archive losers with written reasons
@@ -76,6 +77,7 @@ MOOD = BASE / "mood.json"
 PERSONALITY_DRIFT = BASE / "personality-drift.json"
 GOALS = BASE / "goals.json"
 FOLLOWTHROUGH = BASE / "followthrough.json"
+STAKES = BASE / "stakes.json"
 DEFERRALS = BASE / "deferrals.json"
 ARCHIVE = BASE / "archive"
 PROPOSALS = BASE / "proposals"
@@ -189,6 +191,7 @@ def _init_wipe_targets():
         ("PERSONALITY_DRIFT", PERSONALITY_DRIFT, False),
         ("GOALS", GOALS, False),
         ("FOLLOWTHROUGH", FOLLOWTHROUGH, False),
+        ("STAKES", STAKES, False),
         ("DEFERRALS", DEFERRALS, False),
         ("SALIENCE", SALIENCE, False),
         ("INTEROCEPTION", INTEROCEPTION, False),
@@ -377,6 +380,13 @@ def cmd_init(args):
     # would otherwise brick --force before the wipe ran.
     if FOLLOWTHROUGH.exists():
         FOLLOWTHROUGH.unlink()
+    # Loss-ledger sidecar (2026-11-24): stale loss rows and habit
+    # baselines must never attach to a reseeded incarnation's ticks
+    # (same bug class as the salience/familiarity resets above). Wiped
+    # BEFORE construction: the tracker fails loud on a corrupt sidecar,
+    # which would otherwise brick --force before the wipe ran.
+    if STAKES.exists():
+        STAKES.unlink()
     # Deferral-bucket sidecar (2026-11-12): stale buckets, deferred
     # items, and release records must never attach to a reseeded
     # incarnation's ticks (same bug class as the
@@ -500,6 +510,18 @@ def _run_tick(subject):
     # never tick, so neither can write the sidecar.
     from .followthrough import FollowthroughTracker
     ftracker = FollowthroughTracker(FOLLOWTHROUGH)
+    # Loss ledger (domain 31, 2026-11-24): the tracker is constructed
+    # here, before the heartbeat, so a corrupt sidecar fails loudly
+    # before the tick runs (fail-closed, same precedent as
+    # mood/interoception/personality/goals/followthrough), never
+    # silently resets. It is fed after the tick, below, at the same
+    # hook as the other trackers — after the habits reconcile and the
+    # dormancy demotion, so the strengths it reads are this tick's
+    # reconciled ones. Waking ticks only — _run_tick never serves dream
+    # ticks, and read-only commands never tick, so neither can write
+    # the sidecar.
+    from .stakes import StakesTracker
+    stracker = StakesTracker(STAKES)
     # Host-layer feeder (2026-10-08): slow tick-count rhythm of the frozen
     # engine's food/drink events — waking ticks only. Enqueued before the
     # heartbeat so the tick consumes them as external events; the engine's
@@ -687,6 +709,16 @@ def _run_tick(subject):
         if fresh_dtracker is not None:
             fresh_dtracker.ack_demotion_notes(demote_events)
             fresh_dtracker.save()
+    # Loss-ledger feed: one observation of this waking tick's formed-
+    # habit strengths and commitment resolutions. Placed here — after
+    # the habits reconcile and the dormancy demotion — so the strengths
+    # read are this tick's reconciled ones, not last tick's. A crossing
+    # (at/above 0.65 at the last observation, below it now) mints
+    # exactly one loss row; a newly-broken commitment mints exactly one
+    # row. Save only when the ledger moved (no-op write discipline,
+    # mirroring familiarity/personality).
+    if stracker.observe(subject, result["tick"]):
+        stracker.save()
     # Inbox-expectation wiring (2026-09-26): stale unanswered prompts become
     # frozen-engine Expectation records so the engine's own temporal /
     # unresolved_concern machinery can resurface them. Waking ticks only —
@@ -1982,6 +2014,70 @@ def cmd_followthrough(args):
     return 0
 
 
+def _fmt_strength(value: float) -> str:
+    """A strength in exact short form: 0.65 stays "0.65", 0.649 stays
+    "0.649" — a two-decimal render would collapse the loss line."""
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def cmd_stakes(args):
+    """Loss-ledger report (Domain 31): documented losses and current
+    at-risk stakes.
+
+    Read-only: the tracker constructor only reads the sidecar, and
+    report() is a pure read of live state + sidecar. Never writes
+    stakes.json — running this command twice returns the same report
+    and leaves the sidecar byte-identical, and a fresh store reports
+    empty state without minting a sidecar. On a store with no losses
+    it says so explicitly — never a quiet zero.
+    """
+    from .stakes import StakesTracker, report
+    subject = _subject()
+    rep = report(subject, StakesTracker(STAKES))
+    print(f"stakes (tick {rep['tick']}, "
+          f"{len(rep['at_risk_habits'])} formed habit(s) at or above "
+          f"bypass, {len(rep['open_commitments'])} open commitment(s)) "
+          f"— read-only")
+    if not rep["at_risk_habits"]:
+        print("  at risk: none — no formed habit holds bypass")
+    else:
+        print("  at risk (formed habits at or above 0.65 — what disuse "
+              "would cost):")
+        for h in rep["at_risk_habits"]:
+            print(f"    {h['habit']}: strength "
+                  f"{_fmt_strength(h['strength'])}")
+    if not rep["open_commitments"]:
+        print("  open commitments: none")
+    else:
+        print("  open commitments:")
+        for c in rep["open_commitments"]:
+            due = (f"due tick {c['due_tick']}"
+                   if c["due_tick"] is not None else "no due tick")
+            print(f"    {c['id'][:8]} [{c['status']}] {due}: "
+                  f"{c['description'][:80]}")
+    counts = rep["counts"]
+    print(f"  losses: {counts['total']} total "
+          f"({counts['habit-bypass']} habit-bypass, "
+          f"{counts['broken-commitment']} broken-commitment)")
+    if not rep["losses"]:
+        print("  no losses recorded")
+    else:
+        print(f"  losses, most recent first (showing "
+              f"{rep['losses_shown']} of {rep['losses_total']}, "
+              f"limit {rep['losses_limit']}):")
+        for row in rep["losses"]:
+            if row["kind"] == "habit-bypass":
+                print(f"    [tick {row['tick']}] habit-bypass: "
+                      f"{row['habit']} fell "
+                      f"{_fmt_strength(row['before'])} -> "
+                      f"{_fmt_strength(row['after'])}")
+            else:
+                print(f"    [tick {row['tick']}] broken-commitment: "
+                      f"{row['commitment_id'][:8]}: "
+                      f"{row['description'][:80]} — {row['outcome']}")
+    return 0
+
+
 def cmd_predictions(args):
     """Prediction-error report (Domain 21): the engine's own surprise, observed.
 
@@ -2677,6 +2773,9 @@ def main(argv=None):
 
     p = sub.add_parser("followthrough", help="realization follow-through: whether recorded realizations are followed by conduct change (read-only)")
     p.set_defaults(func=cmd_followthrough)
+
+    p = sub.add_parser("stakes", help="loss ledger: documented losses and current at-risk stakes (read-only)")
+    p.set_defaults(func=cmd_stakes)
 
     p = sub.add_parser("predictions", help="prediction-error traces: counts, trace rate over the last 100 prediction-carrying events, recent + largest errors (read-only)")
     p.set_defaults(func=cmd_predictions)

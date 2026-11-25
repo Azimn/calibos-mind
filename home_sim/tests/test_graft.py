@@ -33,28 +33,29 @@ class TestCustody(unittest.TestCase):
     def test_mug_carried_across_moves(self):
         s = fresh(room="kitchen")
         s, _ = rhythm.act(s, "brew_tea")
-        self.assertEqual(s["mug_in"], "kitchen")
-        s, text = rhythm.act(s, "take_mug")
-        self.assertIn("mug", s["carried"])
-        self.assertIsNone(s["mug_in"])
+        # A fresh brew rides along when a hand is free: hot, in hand.
+        self.assertEqual(s["mug"]["location"], "carried")
+        self.assertEqual(rhythm.mug_temp(s), 160)
+        self.assertEqual(rhythm.mug_warmth(s), "hot")
         s, _ = rhythm.act(s, "move", {"to": "study"})
         self.assertIn("mug", s["carried"])
         scene = rhythm.scene_text(s)
-        self.assertIn("mug of tea", scene)
-        s, text = rhythm.act(s, "sip_tea")
-        self.assertIn("tannic", text)
-        self.assertEqual(s["mug_sips"], 2)
+        # Ten minutes on: the tea has cooled just past hot into warm.
+        self.assertIn("mug of tea, still warm", scene)
+        s, text = rhythm.act(s, "sip")
+        self.assertIn("still warm", text)
         s, _ = rhythm.act(s, "put_mug")
         self.assertNotIn("mug", s["carried"])
-        self.assertEqual(s["mug_in"], "study")
+        self.assertEqual(s["mug"]["location"], "desk")
 
     def test_hands_hold_two_things(self):
         s = fresh(room="kitchen")
         s, _ = rhythm.act(s, "prepare_meal")
         s, _ = rhythm.act(s, "take_plate")
         s, _ = rhythm.act(s, "brew_tea")
-        s, _ = rhythm.act(s, "take_mug")
+        # One hand held the plate; the fresh mug rode along in the other.
         self.assertEqual(len(s["carried"]), 2)
+        self.assertIn("mug", s["carried"])
         s, _ = rhythm.act(s, "move", {"to": "study"})
         with self.assertRaises(rhythm.HomeConflict):
             rhythm.act(s, "take_book")
@@ -168,7 +169,7 @@ class TestWardrobe(unittest.TestCase):
     def test_change_requires_free_hands(self):
         s = fresh(room="kitchen")
         s, _ = rhythm.act(s, "brew_tea")
-        s, _ = rhythm.act(s, "take_mug")
+        # The fresh mug is already in hand after brewing.
         s, _ = rhythm.act(s, "move", {"to": "rest"})
         with self.assertRaises(rhythm.HomeConflict):
             rhythm.act(s, "wear_outfit", {"look_id": "waistcoat"})
@@ -196,7 +197,7 @@ class TestWardrobe(unittest.TestCase):
         s, _ = rhythm.act(s, "wear_outfit", {"look_id": "denim"})
         s, _ = rhythm.act(s, "move", {"to": "kitchen"})
         s, _ = rhythm.act(s, "brew_tea")
-        s, _ = rhythm.act(s, "take_mug")
+        # The fresh mug is already in hand after brewing.
         s, _ = rhythm.act(s, "move", {"to": "rest"})
         with self.assertRaises(rhythm.HomeConflict):
             rhythm.act(s, "remove_item", {"slot": "outerwear"})

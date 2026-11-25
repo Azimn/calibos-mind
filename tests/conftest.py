@@ -59,7 +59,7 @@ REDIRECTED = (
     "DORMANCY", "PROVENANCE", "EXPECTATIONS", "PREDICTION_ERRORS",
     "MOOD", "ARCHIVE", "PROPOSALS",
     "WAKE_LIVENESS", "ABLATION_SALT_FILE", "ABLATION_LOG",
-    "PERSONALITY_DRIFT", "GOALS", "FOLLOWTHROUGH", "DEFERRALS",
+    "PERSONALITY_DRIFT", "GOALS", "FOLLOWTHROUGH", "STAKES", "DEFERRALS",
 )
 
 # Basenames for the synthetic tree, mirroring the live layout.
@@ -81,6 +81,7 @@ _FILENAMES = {
     "PERSONALITY_DRIFT": "personality-drift.json",
     "GOALS": "goals.json",
     "FOLLOWTHROUGH": "followthrough.json",
+    "STAKES": "stakes.json",
     "DEFERRALS": "deferrals.json",
     "ARCHIVE": "archive",
     "PROPOSALS": "proposals",

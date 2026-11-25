@@ -126,12 +126,12 @@ def summarize_night(records: list[dict], weather: dict | None = None
     if not records:
         return "(no off-hours activity recorded — simulated)"
     night = records[0].get("night_date") or "that night"
-    preferred = ("watch_fish", "name_fish", "feed_fish", "sip_tea",
-                 "brew_tea", "read", "write", "eat", "harvest", "sleep",
-                 "wear_outfit", "wear_item", "quiet", "sit", "tend_garden",
-                 "store_produce", "take_book", "bookmark", "listen",
-                 "touch", "smell", "taste", "write_note", "write_diary",
-                 "read_diary")
+    preferred = ("watch_fish", "name_fish", "feed_fish", "sip",
+                 "brew_tea", "take_mug", "read", "write", "eat", "harvest",
+                 "sleep", "wear_outfit", "wear_item", "quiet", "sit",
+                 "tend_garden", "store_produce", "take_book", "bookmark",
+                 "listen", "touch", "smell", "taste", "write_note",
+                 "write_diary", "read_diary")
     moments: list[str] = []
     seen: set[str] = set()
     for r in sim:

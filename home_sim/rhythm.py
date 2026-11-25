@@ -77,13 +77,14 @@ No I/O, no imports from the mind package. First-person text is Calibos's "I".
 from __future__ import annotations
 
 import copy
+import math
 from datetime import date, timedelta
 
 from . import library, weather
 from .rooms import ROOMS, ROOM_LABELS, AFFORDANCES, CLUTTERED_ROOMS
 from .wardrobe import GARMENTS, LOOKS, describe_worn
 
-RULES = "calibos-home-rhythm/6"
+RULES = "calibos-home-rhythm/7"
 
 # One off-hours night runs 23:00 -> 07:00 local.
 NIGHT_START_MINUTE = 23 * 60
@@ -100,8 +101,21 @@ GROWTH_CAP = 3
 
 # Hands: two of them. Carried items are mug, plate, or book:<id>.
 HANDS = 2
-MUG_SIPS = 3
 READ_WORDS = 250
+
+# The one mug. It cools toward the indoor temperature, 68 F, exponentially
+# from the brewed temperature — analytic, evaluated on read, never ticked
+# in the background. The outdoor weather temp is for the sky and the
+# garden, not the kitchen. At 0.026 per minute a fresh 160 F brew stays
+# hot (~10 min), then warm (~30 min), then cool (~65 min), then cold,
+# approaching 68 F without ever quite reaching it.
+MUG_BREW_TEMP_F = 160
+MUG_INDOOR_TEMP_F = 68
+MUG_COOLING_PER_MINUTE = 0.026
+
+# Where a set-down mug is said to be, by room: the study's is on the desk.
+MUG_ROOM_LABELS = {"study": "desk", "kitchen": "kitchen",
+                   "rest": "rest", "garden": "garden"}
 
 # Fish hunger, in simulated minutes since last fed. One missed night
 # (480 minutes) is nothing; hunger shows at one day, danger at two, and
@@ -125,7 +139,7 @@ OP_DURATIONS = {
     "tend_garden": 20, "harvest": 10,
     "sleep": 240, "rest": 60,
     "touch": 1, "smell": 1, "taste": 1, "listen": 2,
-    "take_mug": 1, "put_mug": 1, "sip_tea": 2,
+    "take_mug": 1, "put_mug": 1, "sip": 2,
     "take_plate": 1, "put_plate": 1,
     "take_book": 1, "put_book": 1, "bookmark": 1,
     "quiet": 10, "sit": 10, "watch_fish": 10,
@@ -143,7 +157,7 @@ OP_ROOMS = {
     "tend_garden": "garden", "harvest": "garden",
     "sleep": "rest", "rest": "rest",
     "touch": None, "smell": None, "taste": None, "listen": None,
-    "take_mug": None, "put_mug": None, "sip_tea": None,
+    "take_mug": None, "put_mug": None, "sip": None,
     "take_plate": "kitchen", "put_plate": None,
     "take_book": None, "put_book": None, "bookmark": "study",
     "quiet": None, "sit": None, "watch_fish": "study",
@@ -312,8 +326,7 @@ def initial_state(night_date: str, start_minute: int = NIGHT_START_MINUTE) -> di
         "world_bias": None,
         "last_op": None,
         "carried": [],
-        "mug_in": None,
-        "mug_sips": 0,
+        "mug": {"location": None, "temp_f": None, "brewed_minute": None},
         "plate_in": None,
         "books": library.initial_book_state(),
         "fish": {"alive": True, "name": "", "hunger": 0},
@@ -335,8 +348,8 @@ def _validate(state: dict) -> None:
     if set(state) != {"rules", "night_date", "minute", "tick", "room",
                       "hunger", "thirst", "fatigue", "rations", "produce",
                       "garden_growth", "meal_ready", "lamps", "clutter",
-                      "world_bias", "last_op", "carried", "mug_in",
-                      "mug_sips", "plate_in", "books", "fish",
+                      "world_bias", "last_op", "carried", "mug",
+                      "plate_in", "books", "fish",
                       "fish_observation", "wardrobe", "notes", "diary",
                       "applied_overrides", "world_notices",
                       "override_first_night", "room_objects",
@@ -391,11 +404,28 @@ def _validate(state: dict) -> None:
             or any(not isinstance(item, str) or not _valid_item(item)
                    for item in carried)):
         raise HomeConflict("Invalid carried items")
-    if state["mug_in"] is not None and state["mug_in"] not in ROOMS:
+    mug = state["mug"]
+    if (not isinstance(mug, dict)
+            or set(mug) != {"location", "temp_f", "brewed_minute"}):
+        raise HomeConflict("Invalid mug")
+    loc = mug["location"]
+    if (loc is not None
+            and loc not in ("carried",) + tuple(MUG_ROOM_LABELS.values())):
         raise HomeConflict("Invalid mug location")
-    if (type(state["mug_sips"]) is not int
-            or not 0 <= state["mug_sips"] <= MUG_SIPS):
-        raise HomeConflict("Invalid mug sips")
+    if loc is None:
+        if mug["temp_f"] is not None or mug["brewed_minute"] is not None:
+            raise HomeConflict("Invalid mug")
+    else:
+        if (type(mug["temp_f"]) not in (int, float)
+                or not 32 <= mug["temp_f"] <= 212):
+            raise HomeConflict("Invalid mug temperature")
+        if (type(mug["brewed_minute"]) is not int
+                or mug["brewed_minute"] < 0):
+            raise HomeConflict("Invalid mug brew time")
+    # One mug, one custody: carried means in hand, a room label means
+    # set down there. A state that says both is lying.
+    if (loc == "carried") != ("mug" in carried):
+        raise HomeConflict("Invalid mug custody")
     if state["plate_in"] is not None and state["plate_in"] not in ROOMS:
         raise HomeConflict("Invalid plate location")
     books = state["books"]
@@ -690,6 +720,50 @@ def _need_signals(state: dict) -> str:
     return sentence
 
 
+def _mug_room_label(room: str) -> str:
+    """Where a mug set down in this room is said to be."""
+    return MUG_ROOM_LABELS[room]
+
+
+def mug_temp(state: dict) -> float | None:
+    """Current tea temperature in F, or None when there is no mug.
+
+    Analytic: the brew cools exponentially toward the indoor 68 F from
+    its brewed temperature, over sim-minutes since brewed_minute. Nothing
+    ticks it; this is evaluated on read, so a mug left alone goes cold
+    by the clock alone. A brew time in the future (a hand-built state)
+    reads as just brewed, never hotter than the brew.
+    """
+    mug = state["mug"]
+    if mug["location"] is None:
+        return None
+    dt = max(0, state["minute"] - mug["brewed_minute"])
+    return (MUG_INDOOR_TEMP_F
+            + (mug["temp_f"] - MUG_INDOOR_TEMP_F)
+            * math.exp(-MUG_COOLING_PER_MINUTE * dt))
+
+
+def mug_warmth(state: dict) -> str | None:
+    """hot / warm / cool / cold, or None when there is no mug."""
+    temp = mug_temp(state)
+    if temp is None:
+        return None
+    if temp >= 140:
+        return "hot"
+    if temp >= 110:
+        return "warm"
+    if temp >= 85:
+        return "cool"
+    return "cold"
+
+
+def _warmth_adjective(warmth: str | None) -> str:
+    """The warmth as scene wording: 'still hot', 'still warm',
+    'gone cool', 'gone cold'."""
+    return {"hot": "still hot", "warm": "still warm",
+            "cool": "gone cool", "cold": "gone cold"}.get(warmth, "")
+
+
 def _describe_carried(state: dict) -> str:
     """First-person phrase for what is in hand, or '' when hands are empty."""
     if not state["carried"]:
@@ -697,8 +771,8 @@ def _describe_carried(state: dict) -> str:
     parts = []
     for item in state["carried"]:
         if item == "mug":
-            parts.append("a mug of tea" if state["mug_sips"] > 0
-                         else "an empty mug")
+            parts.append("a mug of tea, "
+                         + _warmth_adjective(mug_warmth(state)))
         elif item == "plate":
             parts.append("a plate with my meal")
         elif item.startswith("book:"):
@@ -789,6 +863,17 @@ def _perceive(state: dict, overrides: dict | None = None) -> str:
                                    obj.get("nights"),
                                    state["night_date"])):
             sentence += " " + obj["text"]
+    # The mug, left somewhere: named with its warmth, like the carried
+    # one. Only this room's mug, only while it exists.
+    mug = state["mug"]
+    if (mug["location"] is not None
+            and mug["location"] != "carried"
+            and mug["location"] == _mug_room_label(room)):
+        place = {"desk": "on the desk", "kitchen": "on the counter",
+                 "rest": "on the bedside table",
+                 "garden": "on the garden wall"}[mug["location"]]
+        sentence += (f" A mug of tea sits {place}, "
+                     f"{_warmth_adjective(mug_warmth(state))}.")
     sentence += _need_signals(state)
     if room == "study":
         sentence += (' A planted aquarium stands on the low table. A small '
@@ -1147,19 +1232,32 @@ def act(state: dict, op: str, args: dict | None = None,
             raise HomeConflict("I am too exhausted to brew tea")
         _pass_time(new, OP_DURATIONS[op])
         new["thirst"] = max(0, new["thirst"] - 4)
-        text = "I brew tea and drink it slowly. The warmth is welcome."
-        if new["mug_in"] is None and "mug" not in new["carried"]:
-            new["mug_in"] = "kitchen"
-            new["mug_sips"] = MUG_SIPS
-            text += " I fill a mug to carry with me."
+        # A fresh brew: the one mug, hot again. It rides along if a hand
+        # is free — or is already in hand, refilled where it is — and
+        # stays on the kitchen counter when both hands are full, said
+        # plainly: that is a real consequence of full hands, not a
+        # silent drop.
+        if "mug" in new["carried"] or len(new["carried"]) < HANDS:
+            if "mug" not in new["carried"]:
+                new["carried"].append("mug")
+            location = "carried"
+            text = ("I brew tea and drink it slowly. The warmth is "
+                    "welcome. I fill a mug to carry with me.")
+        else:
+            location = "kitchen"
+            text = ("I brew tea and drink it slowly. The warmth is "
+                    "welcome. My hands are full, so the mug stays on "
+                    "the kitchen counter.")
+        new["mug"] = {"location": location, "temp_f": MUG_BREW_TEMP_F,
+                      "brewed_minute": new["minute"]}
     elif op == "take_mug":
         if args:
             raise HomeError("Taking the mug takes no arguments")
-        if new["mug_in"] != room:
+        if new["mug"]["location"] != _mug_room_label(room):
             raise HomeConflict("There is no mug here to take")
         if len(new["carried"]) >= HANDS:
             raise HomeConflict("Both hands are full")
-        new["mug_in"] = None
+        new["mug"]["location"] = "carried"
         new["carried"].append("mug")
         _pass_time(new, OP_DURATIONS[op])
         text = "I take the mug carefully into my hands."
@@ -1169,21 +1267,25 @@ def act(state: dict, op: str, args: dict | None = None,
         if "mug" not in new["carried"]:
             raise HomeConflict("I am not carrying a mug")
         new["carried"].remove("mug")
-        new["mug_in"] = room
+        new["mug"]["location"] = _mug_room_label(room)
         _pass_time(new, OP_DURATIONS[op])
         text = "I put the mug down."
-    elif op == "sip_tea":
+    elif op == "sip":
         if args:
             raise HomeError("Sipping tea takes no arguments")
-        if "mug" not in new["carried"]:
-            raise HomeConflict("I am not carrying a mug of tea")
-        if new["mug_sips"] <= 0:
-            raise HomeConflict("The mug is empty")
-        new["mug_sips"] -= 1
+        mug = new["mug"]
+        here = (mug["location"] == "carried"
+                or mug["location"] == _mug_room_label(room))
+        if not here:
+            raise HomeConflict("There is no mug of tea here to sip")
+        # The warmth is the temperature at the moment of the sip; the
+        # two minutes of sipping cool it a little further, which the
+        # next read will show. Sipping changes nothing but thirst —
+        # temperature is purely a function of time.
+        warmth = _warmth_adjective(mug_warmth(new))
         _pass_time(new, OP_DURATIONS[op])
         new["thirst"] = max(0, new["thirst"] - 1)
-        text = ("The tea tastes tannic and mild, with a little "
-                "astringency.")
+        text = f"I take a sip. The tea is {warmth}."
     elif op == "take_book":
         book_id = args.get("book_id")
         if set(args) - {"book_id"}:

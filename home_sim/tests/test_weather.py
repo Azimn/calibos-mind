@@ -342,8 +342,8 @@ class TestGardenNudge(unittest.TestCase):
 
 
 class TestSchemaAndRollForward(unittest.TestCase):
-    def test_rules_version_six_and_weather_key(self):
-        self.assertEqual(rhythm.RULES, "calibos-home-rhythm/6")
+    def test_rules_version_seven_and_weather_key(self):
+        self.assertEqual(rhythm.RULES, "calibos-home-rhythm/7")
         state = rhythm.initial_state("2026-11-21")
         self.assertIn("weather", state)
         self.assertEqual(state["weather"]["condition"], "clear")

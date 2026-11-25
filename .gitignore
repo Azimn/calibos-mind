@@ -60,6 +60,22 @@ prediction_errors.json
 # calibos_mind/followthrough.py, which IS tracked; only the per-run
 # action log stays private.
 followthrough.json
+# Loss ledger (2026-11-24): habit bypass-loss and broken-commitment
+# rows, the evidence base for what the mind has lost. Private
+# metacognitive state, local-only like salience.json — the tracker and
+# report live in calibos_mind/stakes.py, which IS tracked; only the
+# per-run loss ledger stays private. The ledger holds verbatim
+# commitment descriptions and outcome text, so it is never tracked.
+stakes.json
+# Atomic-save shadows (2026-11-24): every local-only tracker sidecar is
+# written via `<sidecar>.tmp` + os.replace (stakes.py, followthrough.py,
+# habits.py, authored_dormancy.py, consolidate.py). A crash or kill
+# between the write and the replace leaves the shadow on disk holding
+# the complete sidecar body — verbatim commitment descriptions and
+# outcome text in stakes.json.tmp's case — so the shadow needs ignoring
+# in its own right, not just the sidecar it shadows. Blanket *.tmp:
+# no tracked file ends in .tmp and no code path expects one committed.
+*.tmp
 # Habit formation (2026-10-02): rolling (trigger, action) co-fire window,
 # formed-habit metadata, and removal archive. Private procedural-learning
 # state, local-only like salience.json — the formation/growth/decay rules

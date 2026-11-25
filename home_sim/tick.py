@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import random
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -135,11 +136,12 @@ class Proposer:
             w *= 0.8
         if op in ("take_book", "put_book"):
             w *= 0.5
-        if op == "take_mug" and state.get("mug_in") == room:
+        if op == "take_mug" and (state["mug"]["location"]
+                                == rhythm._mug_room_label(room)):
             w *= 1.5
         if op == "take_plate" and state.get("meal_ready"):
             w *= 2.0
-        if op == "sip_tea" and "mug" in state.get("carried", []):
+        if op == "sip" and "mug" in state.get("carried", []):
             w *= 2.0 if thirst >= 4 else 1.0
         if op in ("open_wardrobe", "wear_outfit", "wear_item",
                   "remove_item", "name_fish", "bookmark", "write_note",
@@ -153,13 +155,21 @@ class Proposer:
         w *= self.rng.uniform(0.7, 1.3)
         return w
 
-    def candidates(self, state: dict) -> list[tuple[str, dict, float]]:
+    def candidates(self, state: dict, *, night: bool = True
+                   ) -> list[tuple[str, dict, float]]:
         """All legal (op, args) with weights. Expensive on purpose — the
-        throwaway act() calls keep gates in one place."""
+        throwaway act() calls keep gates in one place.
+
+        night=True is the autonomous night: it never takes the mug and
+        never sips — the night never drinks tea; only the resident does.
+        night=False is a visit shortlist, where the mug verbs are
+        offered when sensible."""
         room = state["room"]
         scored = []
         ops = list(AFFORDANCES[room]) + ["look", "light_lamp", "douse_lamp"]
         for op in ops:
+            if night and op in ("take_mug", "sip"):
+                continue
             if self._try(state, op, {}):
                 scored.append((op, {}, self._weight(state, op, {})))
         for target in ROOMS:
@@ -172,11 +182,11 @@ class Proposer:
         scored.sort(key=lambda c: c[2], reverse=True)
         return scored
 
-    def propose(self, state: dict
+    def propose(self, state: dict, *, night: bool = True
                 ) -> tuple[list[tuple[str, dict]], tuple[str, dict]]:
         """Return (shortlist of up to 3, chosen one). The shortlist is the
         roads considered; the event log keeps them as `considered`."""
-        scored = self.candidates(state)
+        scored = self.candidates(state, night=night)
         if not scored:
             raise rhythm.HomeError("No legal action — the home is stuck")
         shortlist = [(op, args) for op, args, _ in scored[:3]]
@@ -218,7 +228,7 @@ def _next_night(night_date: str) -> str:
 _PERSISTENT_KEYS = ("fish", "books", "wardrobe", "notes", "diary",
                     "fish_observation", "applied_overrides", "weather",
                     "override_first_night", "room_objects",
-                    "ambience_lines", "temp_override")
+                    "ambience_lines", "temp_override", "mug")
 
 
 def _carry_forward(new_state: dict, old_state: dict) -> None:
@@ -229,6 +239,19 @@ def _carry_forward(new_state: dict, old_state: dict) -> None:
     for entry in new_state["books"].values():
         if entry["location"] == "carried":
             entry["location"] = "study"
+    # The mug rides across the morning too — but a carried mug is set
+    # down where the resident stood (hands reset empty), and overnight
+    # the tea reaches room temperature: a whole day passed, so the brew
+    # is long past and the anchor is the indoor temperature at the new
+    # night's start. Yesterday's tea is honestly cold, never magically
+    # hot again.
+    mug = new_state.get("mug")
+    if mug and mug.get("location") is not None:
+        if mug["location"] == "carried":
+            mug["location"] = rhythm.MUG_ROOM_LABELS.get(
+                old_state["room"], "kitchen")
+        mug["temp_f"] = rhythm.MUG_INDOOR_TEMP_F
+        mug["brewed_minute"] = new_state["minute"]
 
 
 def _prev_night(night_date: str) -> str:
@@ -666,17 +689,53 @@ class Home:
         self.save()
 
     def save(self) -> None:
+        """Persist the state atomically: temp file, fsync, rename.
+
+        state.json is the authority; events.jsonl is the audit trail.
+        Home.do appends the event to the log first and then saves, so a
+        crash between the two leaves the log one event ahead of the
+        state. That is a record gap, not a corrupted world: if the two
+        ever disagree after a crash, the state wins and the log is
+        re-read as history, never replayed to rebuild state. No
+        reconciler is built on purpose — a reconciler that guessed
+        wrong would be worse than a missing line in the log.
+        """
         rhythm._validate(self.state)
         tmp = self.state_path.with_suffix(".json.tmp")
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(self.state, fh, indent=2)
-        tmp.replace(self.state_path)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, self.state_path)
+        self._fsync_dir()
+
+    def _fsync_dir(self) -> None:
+        """Flush the directory entry for the rename, best effort.
+
+        Makes the replace itself durable against power loss, not just
+        process death. Silently skipped where the platform cannot fsync
+        a directory (e.g. Windows); the rename is still atomic there
+        for process crashes, which is the failure the house can
+        actually meet.
+        """
+        try:
+            fd = os.open(self.state_dir, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
 
     def do(self, op: str, args: dict | None = None,
            considered: list[str] | None = None) -> dict:
         """Take one resident-chosen action: apply it, log it, save.
         Returns the event record. Raises HomeError if the action is not
-        possible here — the state is left untouched."""
+        possible here — the state is left untouched. The order is
+        deliberate: log first, then save (see save() for why the state
+        is the authority when the two disagree after a crash)."""
         new_state, text = rhythm.act(self.state, op, args or {},
                                      self.active_overrides)
         self.state = new_state
