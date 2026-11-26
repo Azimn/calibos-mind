@@ -11,6 +11,58 @@ and values memories.
 Rule: every code, config, or cartridge change gets an entry here, dated,
 before it ships. The git history is the backup; this file is the story.
 
+## 2026-11-25 — Access report (`mind access`) (Domain 32)
+
+Spec: `research/specs/2026-11-25-access-report.md`. The Article 32
+daily pass established its verdict (Partial, unchanged) only after four
+ad-hoc probes: a store scan, a code grep, a git check, a config hunt.
+The access facts the article turns on — what the thinker can actually
+see, what is genuinely unavailable, where the view boundary sits — are
+now measurable in one read-only command.
+
+New module `calibos_mind/access.py` (pure report function, no sidecar,
+no state of its own) plus a read-only `mind access` command, wired
+like `mind drift` / `mind relationships` / `mind stakes`. It reports:
+
+- `VIEW_LIMIT` and `MAX_PINNED` as defined in `workspace.py`.
+- Total records, available to cognition, and unavailable broken down
+  by cause: `available_to_cognition` False vs archived-excluded (via
+  `archive/availability.json` when present; 0 and "no availability
+  file" when absent — never a quiet zero).
+- Pinned (cartridge-authored, eligible) count, capped at `MAX_PINNED`,
+  with the eligible total alongside it.
+- View composition: pinned count + ranked room (`VIEW_LIMIT` -
+  pinned, floored the same way `workspace.view()` floors it), plus
+  the admitted count, measured — never assumed to equal the room.
+- `inner_ear` from the live config.
+- The over-access figure: "view shows N of M records", with a share
+  percentage, or "undefined" when there are no records.
+
+Two measurement points worth recording. First, cartridge records
+beyond the pin cap are not pinned, but they stay eligible for the
+ranked room (`view()` excludes only the capped pinned ids from its
+ranked pool), so a store with 9 cartridge-eligible records shows 6
+pinned + 7 admitted, not 6 + 4 — the builder's first draft assumed
+the cap removed them from the view entirely, and the seeded-mix test
+caught it. Second, a dream tick on a fresh store mints dream-derived
+records (probed: 6 -> 8), so "the command works identically before
+and after a dream tick" is measured honestly: the report tracks the
+store exactly across the dream; the dream changes the store, not the
+reporter.
+
+Fitness: seeded mix exact on every count (including the by-cause
+breakdown and the rebuild-measured view size matching the live
+salience-ranked view); 0-record store defined ("view 0 of 0",
+"undefined" share, no sidecar); missing workspace/records raises
+`ValueError`, never a quiet zero; read-only sweep leaves payload
+content byte-identical with no file created; determinism
+byte-identical; `--help` lists `access`. Full suite green; engine +
+cartridge byte-identical.
+
+Revert signal: a report misstating any count against a seeded store;
+any write from the command; any existing test regressing. Assess
+after 2026-12-09.
+
 ## 2026-11-24 — Loss ledger (`mind stakes`) (Domain 31)
 
 Spec: `research/specs/2026-11-24-loss-ledger.md`. Article 31 follow-up:

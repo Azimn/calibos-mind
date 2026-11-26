@@ -2078,6 +2078,30 @@ def cmd_stakes(args):
     return 0
 
 
+def cmd_access(args):
+    """Access report (Domain 32): what the thinker can actually see.
+
+    View limit, pinned/view composition, total vs available vs
+    archived-excluded counts, the inner_ear setting, and the
+    over-access figure (view shows N of M records).
+
+    Read-only: the report is computed from one inspect() snapshot plus
+    the live view's size, and printed only after it is built in full,
+    so a malformed store raises before any partial report. Never writes
+    the store or any sidecar, and mints none on a fresh store — this
+    command owns no state, so any write would be a defect.
+    """
+    from .access import access_report, format_access_report
+    subject = _subject()
+    state = subject.inspect()
+    view_size = len(subject.workspace.view().experiences)
+    rep = access_report(state,
+                        availability_path=ARCHIVE / "availability.json",
+                        view_size=view_size)
+    print(format_access_report(rep))
+    return 0
+
+
 def cmd_predictions(args):
     """Prediction-error report (Domain 21): the engine's own surprise, observed.
 
@@ -2776,6 +2800,9 @@ def main(argv=None):
 
     p = sub.add_parser("stakes", help="loss ledger: documented losses and current at-risk stakes (read-only)")
     p.set_defaults(func=cmd_stakes)
+
+    p = sub.add_parser("access", help="access report: view limit, pinned/view composition, available vs unavailable counts, inner_ear, view shows N of M records (read-only)")
+    p.set_defaults(func=cmd_access)
 
     p = sub.add_parser("predictions", help="prediction-error traces: counts, trace rate over the last 100 prediction-carrying events, recent + largest errors (read-only)")
     p.set_defaults(func=cmd_predictions)
